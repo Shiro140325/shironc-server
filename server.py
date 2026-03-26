@@ -39,6 +39,10 @@ def update_license(key, activated_at, device_id):
         "device_id": device_id
     }).eq("key", key).execute()
 
+@app.route("/")
+def home():
+    return "OK"
+
 @app.route("/activate", methods=["POST"])
 def activate():
     data = request.json
