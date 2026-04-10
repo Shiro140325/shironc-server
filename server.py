@@ -43,6 +43,23 @@ def update_license(key, activated_at, device_id):
 def home():
     return "OK"
 
+@app.route("/status", methods=["GET"])
+def status():
+    key = request.args.get("key", "").strip().upper()
+    device = request.args.get("device")
+
+    lic = get_license(key)
+    if not lic or lic["device_id"] != device:
+        return jsonify({"active": False}), 200
+
+    days = lic["days"]
+    if days != 0:
+        duration_secs = abs(days) * 60 if days < 0 else days * 86400
+        if time.time() > lic["activated_at"] + duration_secs:
+            return jsonify({"active": False}), 200
+
+    return jsonify({"active": True}), 200
+
 @app.route("/activate", methods=["POST"])
 def activate():
     data = request.json
@@ -53,37 +70,28 @@ def activate():
     if not lic:
         return jsonify({"error": "Invalid license"}), 400
 
-    # first activation only
     if lic["activated_at"] is None:
         activated = int(time.time())
         update_license(key, activated, device)
         lic = get_license(key)
 
-    # prevent reuse on another device
     if lic["device_id"] and lic["device_id"] != device:
         return jsonify({"error": "Used on another device"}), 403
 
-    # expiry check
-    if lic["days"] != 0:
-        if time.time() > lic["activated_at"] + lic["days"] * 86400:
+    days = lic["days"]
+
+    if days != 0:
+        # negative = minutes, positive = days
+        duration_secs = abs(days) * 60 if days < 0 else days * 86400
+        if time.time() > lic["activated_at"] + duration_secs:
             return jsonify({"error": "Expired"}), 403
 
-    if lic["activated_at"] is not None:
-        print("ALREADY ACTIVATED AT:", lic["activated_at"])
+    expires_at = None
+    if days != 0:
+        duration_secs = abs(days) * 60 if days < 0 else days * 86400
+        expires_at = lic["activated_at"] + duration_secs
 
-    print("BEFORE:", lic)
-
-    if lic["activated_at"] is None:
-        activated = int(time.time())
-        print("SETTING ACTIVATED AT:", activated)
-        update_license(key, activated, device)
-        lic = get_license(key)
-
-    print("AFTER:", lic)
-
-    return jsonify({
-        "expires_at": lic["activated_at"] + lic["days"] * 86400 if lic["days"] != 0 else None
-    })
+    return jsonify({"expires_at": expires_at})
 
 
 @app.route("/validate", methods=["POST"])
@@ -92,9 +100,6 @@ def validate():
     key = data.get("key", "").strip().upper()
     device = data.get("device")
 
-    print("VALIDATE KEY:", repr(key))
-    print("DEVICE:", device)
-
     lic = get_license(key)
     if not lic:
         return jsonify({"error": "Invalid"}), 400
@@ -102,12 +107,18 @@ def validate():
     if lic["device_id"] != device:
         return jsonify({"error": "Invalid device"}), 403
 
-    if lic["days"] != 0:
-        if time.time() > lic["activated_at"] + lic["days"] * 86400:
+    days = lic["days"]
+    if days != 0:
+        duration_secs = abs(days) * 60 if days < 0 else days * 86400
+        if time.time() > lic["activated_at"] + duration_secs:
             return jsonify({"error": "Expired"}), 403
 
-    return jsonify({"status": "ok"})
+    expires_at = None
+    if days != 0:
+        duration_secs = abs(days) * 60 if days < 0 else days * 86400
+        expires_at = lic["activated_at"] + duration_secs
 
+    return jsonify({"status": "ok", "expires_at": expires_at})
 @app.route("/add", methods=["POST"])
 def add_license():
 
