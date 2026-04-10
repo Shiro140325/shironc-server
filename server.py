@@ -39,6 +39,19 @@ def update_license(key, activated_at, device_id):
         "device_id": device_id
     }).eq("key", key).execute()
 
+@app.route("/broadcast", methods=["GET"])
+def broadcast():
+    try:
+        res = supabase.table("app_config").select("value").eq("key", "broadcast_message").execute()
+        msg = res.data[0]["value"] if res.data else ""
+        return jsonify({"message": msg}), 200
+    except Exception as e:
+        return jsonify({"message": ""}), 200
+
+@app.route("/health")
+def health():
+    return jsonify({"status": "ok"}), 200
+
 @app.route("/")
 def home():
     return "OK"
