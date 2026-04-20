@@ -50,7 +50,7 @@ def broadcast():
 
 @app.route("/health")
 def health():
-    return jsonify({"status": "ok"}), 200
+    return jsonify({"status": "ok", "min_version": "1.5.0"}), 200
 
 @app.route("/")
 def home():
