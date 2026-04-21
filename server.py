@@ -9,8 +9,6 @@ import time
 
 app = Flask(__name__)
 
-import os
-
 SUPABASE_URL = os.environ.get("SUPABASE_URL")
 SUPABASE_KEY = os.environ.get("SUPABASE_KEY")
 
@@ -25,6 +23,14 @@ licenses = {
         "device_id": None
     }
 }
+
+MIN_VERSION = (1, 3, 4)
+
+def _parse_version(v: str) -> tuple:
+    try:
+        return tuple(int(x) for x in v.strip().split("."))
+    except Exception:
+        return (0, 0, 0)
 
 def get_license(key):
     res = supabase.table("licenses").select("*").eq("key", key).execute()
@@ -94,7 +100,6 @@ def activate():
     days = lic["days"]
 
     if days != 0:
-        # negative = minutes, positive = days
         duration_secs = abs(days) * 60 if days < 0 else days * 86400
         if time.time() > lic["activated_at"] + duration_secs:
             return jsonify({"error": "Expired"}), 403
@@ -112,6 +117,10 @@ def validate():
     data = request.json
     key = data.get("key", "").strip().upper()
     device = data.get("device")
+    version = _parse_version(data.get("version", "0.0.0"))
+
+    if version < MIN_VERSION:
+        return jsonify({"error": "Invalid"}), 400
 
     lic = get_license(key)
     if not lic:
@@ -132,10 +141,9 @@ def validate():
         expires_at = lic["activated_at"] + duration_secs
 
     return jsonify({"status": "ok", "expires_at": expires_at})
+
 @app.route("/add", methods=["POST"])
 def add_license():
-
-    # 🔐 protect this endpoint
     if request.headers.get("x-admin") != "your-secret":
         return jsonify({"error": "unauthorized"}), 403
 
