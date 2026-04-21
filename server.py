@@ -24,14 +24,6 @@ licenses = {
     }
 }
 
-MIN_VERSION = (1, 3, 4)
-
-def _parse_version(v: str) -> tuple:
-    try:
-        return tuple(int(x) for x in v.strip().split("."))
-    except Exception:
-        return (0, 0, 0)
-
 def get_license(key):
     res = supabase.table("licenses").select("*").eq("key", key).execute()
     if not res.data:
@@ -117,10 +109,6 @@ def validate():
     data = request.json
     key = data.get("key", "").strip().upper()
     device = data.get("device")
-    version = _parse_version(data.get("version", "0.0.0"))
-
-    if version < MIN_VERSION:
-        return jsonify({"error": "Invalid"}), 400
 
     lic = get_license(key)
     if not lic:
