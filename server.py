@@ -24,7 +24,7 @@ licenses = {
     }
 }
 
-MIN_VERSION = (1, 6, 8)
+MIN_VERSION = (1, 7, 11)
 
 def _parse_version(v: str) -> tuple:
     try:
@@ -56,7 +56,7 @@ def broadcast():
 
 @app.route("/health")
 def health():
-    return jsonify({"status": "ok", "min_version": "1.5.5"}), 200
+    return jsonify({"status": "ok", "min_version": "1.7.11"}), 200
 
 @app.route("/")
 def home():
