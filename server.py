@@ -1,4 +1,5 @@
 import os
+import requests as _requests
 print("SERVER RUNNING FROM:", os.getcwd())
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 DB = os.path.join(BASE_DIR, "licenses.db")
@@ -57,6 +58,40 @@ def broadcast():
 @app.route("/health")
 def health():
     return jsonify({"status": "ok", "min_version": "1.7.11"}), 200
+    
+@app.route("/transcribe", methods=["POST"])
+def transcribe():
+    key = request.headers.get("X-License-Key", "").strip().upper()
+    device = request.headers.get("X-Device-ID", "").strip()
+
+    # Reuse existing validation logic
+    lic = get_license(key)
+    if not lic:
+        return jsonify({"error": "unauthorized"}), 401
+    if lic["device_id"] != device:
+        return jsonify({"error": "unauthorized"}), 401
+
+    days = lic["days"]
+    if days != 0:
+        duration_secs = abs(days) * 60 if days < 0 else days * 86400
+        if time.time() > lic["activated_at"] + duration_secs:
+            return jsonify({"error": "expired"}), 401
+
+    file = request.files.get("file")
+    if not file:
+        return jsonify({"error": "no file"}), 400
+
+    try:
+        response = _requests.post(
+            "https://api.groq.com/openai/v1/audio/transcriptions",
+            headers={"Authorization": f"Bearer {os.environ['GROQ_API_KEY']}"},
+            data={k: v for k, v in request.form.items()},
+            files={"file": (file.filename, file.stream, file.mimetype)},
+            timeout=60,
+        )
+        return (response.content, response.status_code, {"Content-Type": "application/json"})
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
 
 @app.route("/")
 def home():
