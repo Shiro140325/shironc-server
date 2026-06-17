@@ -25,7 +25,7 @@ licenses = {
     }
 }
 
-MIN_VERSION = (1, 7, 11)
+MIN_VERSION = (1, 11, 9)
 
 def _parse_version(v: str) -> tuple:
     try:
