@@ -1,6 +1,7 @@
 import os
 import uuid
 import requests as _requests
+import httpx
 print("SERVER RUNNING FROM:", os.getcwd())
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 DB = os.path.join(BASE_DIR, "licenses.db")
@@ -32,6 +33,17 @@ _last_version_check = 0
 _VERSION_CHECK_INTERVAL = 300  # 5 min throttle
 
 
+def supabase_execute(query, retries=1):
+    """Execute a supabase query, retrying once on a dropped/stale connection."""
+    for attempt in range(retries + 1):
+        try:
+            return query.execute()
+        except httpx.RemoteProtocolError:
+            if attempt == retries:
+                raise
+            continue
+
+
 def _parse_version(v: str) -> tuple:
     try:
         return tuple(int(x) for x in v.strip().split("."))
@@ -40,28 +52,30 @@ def _parse_version(v: str) -> tuple:
 
 
 def get_license(key):
-    res = supabase.table("licenses").select("*").eq("key", key).execute()
+    res = supabase_execute(supabase.table("licenses").select("*").eq("key", key))
     if not res.data:
         return None
     return res.data[0]
 
 
 def get_license_by_uid(uid):
-    res = supabase.table("licenses").select("*").eq("unique_identifier", uid).execute()
+    res = supabase_execute(supabase.table("licenses").select("*").eq("unique_identifier", uid))
     if not res.data:
         return None
     return res.data[0]
 
 
 def update_license(key, activated_at, device_id):
-    supabase.table("licenses").update({
-        "activated_at": activated_at,
-        "device_id": device_id
-    }).eq("key", key).execute()
+    supabase_execute(
+        supabase.table("licenses").update({
+            "activated_at": activated_at,
+            "device_id": device_id
+        }).eq("key", key)
+    )
 
 
 def get_min_version():
-    res = supabase.table("app_config").select("value").eq("key", "min_version").execute()
+    res = supabase_execute(supabase.table("app_config").select("value").eq("key", "min_version"))
     if res.data:
         return _parse_version(res.data[0]["value"])
     return MIN_VERSION
@@ -78,7 +92,9 @@ def _maybe_bump_min_version():
     if current_min >= (1, 18, 1):
         return  # already bumped
 
-    res = supabase.table("licenses").select("app_version, days, activated_at").not_.is_("activated_at", "null").execute()
+    res = supabase_execute(
+        supabase.table("licenses").select("app_version, days, activated_at").not_.is_("activated_at", "null")
+    )
 
     now = time.time()
     versions = []
@@ -98,13 +114,15 @@ def _maybe_bump_min_version():
         return
 
     if all(v >= (1, 18, 2) for v in versions):
-        supabase.table("app_config").upsert({"key": "min_version", "value": "1.18.1"}).execute()
+        supabase_execute(
+            supabase.table("app_config").upsert({"key": "min_version", "value": "1.18.1"})
+        )
 
 
 @app.route("/broadcast", methods=["GET"])
 def broadcast():
     try:
-        res = supabase.table("app_config").select("value").eq("key", "broadcast_message").execute()
+        res = supabase_execute(supabase.table("app_config").select("value").eq("key", "broadcast_message"))
         msg = res.data[0]["value"] if res.data else ""
         return jsonify({"message": msg}), 200
     except Exception as e:
@@ -242,9 +260,11 @@ def validate():
             return jsonify({"error": "Invalid device"}), 403
 
     try:
-        supabase.table("licenses").update({"app_version": version_str}).eq(
-            "unique_identifier" if uid else "key", uid if uid else key
-        ).execute()
+        supabase_execute(
+            supabase.table("licenses").update({"app_version": version_str}).eq(
+                "unique_identifier" if uid else "key", uid if uid else key
+            )
+        )
     except Exception:
         pass  # non-critical, don't fail validation over a logging write
 
@@ -281,11 +301,13 @@ def device_register():
     # New device — issue a fresh UID, overwrite the old one (this is what kicks
     # any previously-registered device on its next /validate call)
     uid = str(uuid.uuid4())
-    supabase.table("licenses").update({
-        "unique_identifier": uid,
-        "device_id": device,
-        "activated_at": lic["activated_at"] or int(time.time())
-    }).eq("key", key).execute()
+    supabase_execute(
+        supabase.table("licenses").update({
+            "unique_identifier": uid,
+            "device_id": device,
+            "activated_at": lic["activated_at"] or int(time.time())
+        }).eq("key", key)
+    )
 
     return jsonify({"unique_identifier": uid}), 200
 
@@ -299,12 +321,14 @@ def add_license():
     key = data.get("key")
     days = data.get("days", 90)
 
-    supabase.table("licenses").insert({
-        "key": key,
-        "days": days,
-        "activated_at": None,
-        "device_id": None
-    }).execute()
+    supabase_execute(
+        supabase.table("licenses").insert({
+            "key": key,
+            "days": days,
+            "activated_at": None,
+            "device_id": None
+        })
+    )
 
     return jsonify({"status": "added"})
 
