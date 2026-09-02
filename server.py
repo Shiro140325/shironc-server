@@ -33,14 +33,14 @@ _last_version_check = 0
 _VERSION_CHECK_INTERVAL = 300  # 5 min throttle
 
 
-def supabase_execute(query, retries=1):
-    """Execute a supabase query, retrying once on a dropped/stale connection."""
+def supabase_execute(query, retries=2):
     for attempt in range(retries + 1):
         try:
             return query.execute()
-        except httpx.RemoteProtocolError:
+        except httpx.TransportError:
             if attempt == retries:
                 raise
+            time.sleep(0.2 * (attempt + 1))  # small backoff before retry
             continue
 
 
