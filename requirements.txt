@@ -3,3 +3,4 @@ gunicorn
 supabase
 requests
 httpx
+psycopg2-binary
