@@ -74,11 +74,19 @@ def update_license(key, activated_at, device_id):
     )
 
 
+_min_version_cache = None
+_min_version_cache_time = 0
+_MIN_VERSION_TTL = 300  # 5 min
+
 def get_min_version():
+    global _min_version_cache, _min_version_cache_time
+    now = time.time()
+    if _min_version_cache is not None and now - _min_version_cache_time < _MIN_VERSION_TTL:
+        return _min_version_cache
     res = supabase_execute(supabase.table("app_config").select("value").eq("key", "min_version"))
-    if res.data:
-        return _parse_version(res.data[0]["value"])
-    return MIN_VERSION
+    _min_version_cache = _parse_version(res.data[0]["value"]) if res.data else MIN_VERSION
+    _min_version_cache_time = now
+    return _min_version_cache
 
 
 def _maybe_bump_min_version():
@@ -119,14 +127,23 @@ def _maybe_bump_min_version():
         )
 
 
+_broadcast_cache = ""
+_broadcast_cache_time = 0
+_BROADCAST_TTL = 300  # 5 min
+
 @app.route("/broadcast", methods=["GET"])
 def broadcast():
+    global _broadcast_cache, _broadcast_cache_time
+    now = time.time()
+    if now - _broadcast_cache_time < _BROADCAST_TTL:
+        return jsonify({"message": _broadcast_cache}), 200
     try:
         res = supabase_execute(supabase.table("app_config").select("value").eq("key", "broadcast_message"))
-        msg = res.data[0]["value"] if res.data else ""
-        return jsonify({"message": msg}), 200
-    except Exception as e:
-        return jsonify({"message": ""}), 200
+        _broadcast_cache = res.data[0]["value"] if res.data else ""
+        _broadcast_cache_time = now
+        return jsonify({"message": _broadcast_cache}), 200
+    except Exception:
+        return jsonify({"message": _broadcast_cache}), 200
 
 
 @app.route("/health")
@@ -259,14 +276,15 @@ def validate():
         if lic["device_id"] != device:
             return jsonify({"error": "Invalid device"}), 403
 
-    try:
-        supabase_execute(
-            supabase.table("licenses").update({"app_version": version_str}).eq(
-                "unique_identifier" if uid else "key", uid if uid else key
+    if lic.get("app_version") != version_str:
+        try:
+            supabase_execute(
+                supabase.table("licenses").update({"app_version": version_str}).eq(
+                    "unique_identifier" if uid else "key", uid if uid else key
+                )
             )
-        )
-    except Exception:
-        pass  # non-critical, don't fail validation over a logging write
+        except Exception:
+            pass  # non-critical, don't fail validation over a logging write
 
     _maybe_bump_min_version()
 
