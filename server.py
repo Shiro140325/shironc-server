@@ -53,6 +53,14 @@ MIN_VERSION = (1, 16, 1)  # fallback default if app_config has no min_version ro
 _last_version_check = 0
 _VERSION_CHECK_INTERVAL = 300  # 5 min throttle
 
+# --- min_version read cache (30 min TTL) ---
+_min_version_cache = {"value": None, "ts": 0}
+_MIN_VERSION_TTL = 1800  # 30 min
+
+# --- broadcast read cache (10 min TTL) ---
+_broadcast_cache = {"value": "", "ts": 0}
+_BROADCAST_TTL = 600  # 10 min
+
 
 def _parse_version(v: str) -> tuple:
     try:
@@ -77,8 +85,12 @@ def update_license(key, activated_at, device_id):
 
 
 def get_min_version():
-    row = db_execute("SELECT value FROM app_config WHERE key = %s", ("min_version",), fetch="one")
-    return _parse_version(row["value"]) if row else MIN_VERSION
+    now = time.time()
+    if _min_version_cache["value"] is None or now - _min_version_cache["ts"] > _MIN_VERSION_TTL:
+        row = db_execute("SELECT value FROM app_config WHERE key = %s", ("min_version",), fetch="one")
+        _min_version_cache["value"] = _parse_version(row["value"]) if row else MIN_VERSION
+        _min_version_cache["ts"] = now
+    return _min_version_cache["value"]
 
 
 def _maybe_bump_min_version():
@@ -169,16 +181,21 @@ def check_update():
 
 @app.route("/broadcast", methods=["GET"])
 def broadcast():
-    try:
-        row = db_execute("SELECT value FROM app_config WHERE key = %s", ("broadcast_message",), fetch="one")
-        msg = row["value"] if row else ""
-        return jsonify({"message": msg}), 200
-    except Exception:
-        return jsonify({"message": ""}), 200
+    now = time.time()
+    if now - _broadcast_cache["ts"] > _BROADCAST_TTL:
+        try:
+            row = db_execute("SELECT value FROM app_config WHERE key = %s", ("broadcast_message",), fetch="one")
+            _broadcast_cache["value"] = row["value"] if row else ""
+        except Exception:
+            pass  # keep serving last cached value on a transient DB error
+        _broadcast_cache["ts"] = now
+    return jsonify({"message": _broadcast_cache["value"]}), 200
 
 
 @app.route("/health")
 def health():
+    # Left as a live check: the client uses this endpoint's 200/failure status
+    # to decide whether the server is up and to lock users out if it's down.
     min_v = get_min_version()
     return jsonify({"status": "ok", "min_version": f"{min_v[0]}.{min_v[1]}.{min_v[2]}"}), 200
 
@@ -307,13 +324,16 @@ def validate():
         if lic["device_id"] != device:
             return jsonify({"error": "Invalid device"}), 403
 
-    try:
-        db_execute(
-            f"UPDATE licenses SET app_version = %s WHERE {'unique_identifier' if uid else 'key'} = %s",
-            (version_str, uid if uid else key)
-        )
-    except Exception:
-        pass  # non-critical, don't fail validation over a logging write
+    # Only write the version-log update when it actually changed —
+    # avoids a DB write on every single /validate poll.
+    if lic.get("app_version") != version_str:
+        try:
+            db_execute(
+                f"UPDATE licenses SET app_version = %s WHERE {'unique_identifier' if uid else 'key'} = %s",
+                (version_str, uid if uid else key)
+            )
+        except Exception:
+            pass  # non-critical, don't fail validation over a logging write
 
     _maybe_bump_min_version()
 
