@@ -122,8 +122,8 @@ def get_min_version():
     return _min_version_cache["value"]
 
 
-LATEST_VERSION = "1.18.3"
-LATEST_OBJECT_KEY = "Shiro NC 1.18.3.zip"
+LATEST_VERSION = "1.18.7"
+LATEST_OBJECT_KEY = "Shiro NC 1.18.7.zip"
 R2_PUBLIC_BASE_URL = "https://pub-2ab9e11b01a74a098d73ef9b2169d809.r2.dev"
 
 
