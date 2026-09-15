@@ -1,5 +1,6 @@
 import os
 import uuid
+import json
 import requests as _requests
 import time
 from itertools import zip_longest
@@ -50,9 +51,6 @@ def db_execute(query, params=None, fetch=None, retries=2):
 
 MIN_VERSION = (1, 16, 1)  # fallback default if app_config has no min_version row yet
 
-_last_version_check = 0
-_VERSION_CHECK_INTERVAL = 300  # 5 min throttle
-
 # --- min_version read cache (30 min TTL) ---
 _min_version_cache = {"value": None, "ts": 0}
 _MIN_VERSION_TTL = 1800  # 30 min
@@ -60,6 +58,37 @@ _MIN_VERSION_TTL = 1800  # 30 min
 # --- broadcast read cache (10 min TTL) ---
 _broadcast_cache = {"value": "", "ts": 0}
 _BROADCAST_TTL = 600  # 10 min
+
+# --- server-driven polling config (cached like min_version) ---
+# Lets you retune client polling behavior (license poll interval, heartbeat
+# interval, shadow-check frequency, failure threshold before lockdown)
+# without shipping a new client build. Change via:
+#   INSERT INTO app_config (key, value) VALUES ('poll_config', '{"license_poll_interval": 30, ...}')
+#   ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value;
+_poll_config_cache = {"value": None, "ts": 0}
+_POLL_CONFIG_TTL = 1800  # 30 min
+
+DEFAULT_POLL_CONFIG = {
+    "license_poll_interval": 20,   # seconds between client /validate calls
+    "monitor_interval": 30,        # seconds between client /health + /broadcast calls
+    "shadow_check_every": 3,       # client runs /status shadow-check every Nth license poll
+    "failure_threshold": 3         # consecutive failed heartbeats before client locks down
+}
+
+
+def get_poll_config():
+    now = time.time()
+    if _poll_config_cache["value"] is None or now - _poll_config_cache["ts"] > _POLL_CONFIG_TTL:
+        row = db_execute("SELECT value FROM app_config WHERE key = %s", ("poll_config",), fetch="one")
+        if row:
+            try:
+                _poll_config_cache["value"] = {**DEFAULT_POLL_CONFIG, **json.loads(row["value"])}
+            except Exception:
+                _poll_config_cache["value"] = DEFAULT_POLL_CONFIG
+        else:
+            _poll_config_cache["value"] = DEFAULT_POLL_CONFIG
+        _poll_config_cache["ts"] = now
+    return _poll_config_cache["value"]
 
 
 def _parse_version(v: str) -> tuple:
@@ -91,49 +120,6 @@ def get_min_version():
         _min_version_cache["value"] = _parse_version(row["value"]) if row else MIN_VERSION
         _min_version_cache["ts"] = now
     return _min_version_cache["value"]
-
-
-def _maybe_bump_min_version():
-    global _last_version_check
-    now = time.time()
-    if now - _last_version_check < _VERSION_CHECK_INTERVAL:
-        return
-    _last_version_check = now
-
-    current_min = get_min_version()
-    if current_min >= (1, 18, 1):
-        return  # already bumped
-
-    rows = db_execute(
-        "SELECT app_version, days, activated_at FROM licenses WHERE activated_at IS NOT NULL",
-        fetch="all"
-    )
-
-    now = time.time()
-    versions = []
-    for r in rows:
-        if not r.get("app_version"):
-            continue
-
-        days = r.get("days", 0)
-        if days != 0:
-            duration_secs = abs(days) * 60 if days < 0 else days * 86400
-            if now > r["activated_at"] + duration_secs:
-                continue  # expired license — excluded from the rollout check
-
-        versions.append(_parse_version(r["app_version"]))
-
-    if not versions:
-        return
-
-    if all(v >= (1, 18, 2) for v in versions):
-        db_execute(
-            """
-            INSERT INTO app_config (key, value) VALUES (%s, %s)
-            ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value
-            """,
-            ("min_version", "1.18.1")
-        )
 
 
 LATEST_VERSION = "1.18.3"
@@ -197,7 +183,13 @@ def health():
     # Left as a live check: the client uses this endpoint's 200/failure status
     # to decide whether the server is up and to lock users out if it's down.
     min_v = get_min_version()
-    return jsonify({"status": "ok", "min_version": f"{min_v[0]}.{min_v[1]}.{min_v[2]}"}), 200
+    cfg = get_poll_config()
+    return jsonify({
+        "status": "ok",
+        "min_version": f"{min_v[0]}.{min_v[1]}.{min_v[2]}",
+        "monitor_interval": cfg["monitor_interval"],
+        "failure_threshold": cfg["failure_threshold"]
+    }), 200
 
 
 @app.route("/transcribe", methods=["POST"])
@@ -335,8 +327,6 @@ def validate():
         except Exception:
             pass  # non-critical, don't fail validation over a logging write
 
-    _maybe_bump_min_version()
-
     days = lic["days"]
     if days != 0:
         duration_secs = abs(days) * 60 if days < 0 else days * 86400
@@ -348,7 +338,13 @@ def validate():
         duration_secs = abs(days) * 60 if days < 0 else days * 86400
         expires_at = lic["activated_at"] + duration_secs
 
-    return jsonify({"status": "ok", "expires_at": expires_at})
+    cfg = get_poll_config()
+    return jsonify({
+        "status": "ok",
+        "expires_at": expires_at,
+        "poll_interval": cfg["license_poll_interval"],
+        "shadow_check_every": cfg["shadow_check_every"]
+    })
 
 
 @app.route("/device/register", methods=["POST"])
