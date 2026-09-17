@@ -123,8 +123,19 @@ def get_min_version():
 
 
 LATEST_VERSION = "1.18.7"
-LATEST_OBJECT_KEY = "Shiro NC 1.18.7.zip"
-R2_PUBLIC_BASE_URL = "https://pub-2ab9e11b01a74a098d73ef9b2169d809.r2.dev"
+LATEST_OBJECT_KEY = "Shiro.NC.1.18.7.zip"
+
+# --- Update source config ---
+# TEMPORARY: serving updates from GitHub Releases while Cloudflare R2's
+# custom domain (updates.shironc.com) fails to propagate at the authoritative
+# nameserver level (confirmed via nslookup against cullen.ns.cloudflare.com —
+# NXDOMAIN despite dashboard showing Active). Revert to R2_PUBLIC_BASE_URL
+# once that's resolved — see commented-out line below.
+GITHUB_OWNER = "Shiro140325"      # ← set this
+GITHUB_REPO = "shironc-releases"              # ← set this
+GITHUB_RELEASE_TAG = "v1.18.7"               # ← must match the tag on the release
+
+# R2_PUBLIC_BASE_URL = "https://updates.shironc.com"  # ← swap back to this once R2 is fixed
 
 
 def _parse_version_list(v: str) -> list:
@@ -154,7 +165,7 @@ def check_update():
             "latest_version": LATEST_VERSION
         })
 
-    download_url = f"{R2_PUBLIC_BASE_URL}/{quote(LATEST_OBJECT_KEY)}"
+    download_url = f"https://github.com/{GITHUB_OWNER}/{GITHUB_REPO}/releases/download/{quote(GITHUB_RELEASE_TAG)}/{quote(LATEST_OBJECT_KEY)}"
 
     return jsonify({
         "ok": True,
@@ -316,16 +327,15 @@ def validate():
         if lic["device_id"] != device:
             return jsonify({"error": "Invalid device"}), 403
 
-    # Only write the version-log update when it actually changed —
-    # avoids a DB write on every single /validate poll.
-    if lic.get("app_version") != version_str:
-        try:
-            db_execute(
-                f"UPDATE licenses SET app_version = %s WHERE {'unique_identifier' if uid else 'key'} = %s",
-                (version_str, uid if uid else key)
-            )
-        except Exception:
-            pass  # non-critical, don't fail validation over a logging write
+    # TEMP DEBUG: unconditional write to rule out the "only if changed" guard
+    # while diagnosing why app_version isn't updating. Revert once confirmed.
+    try:
+        db_execute(
+            f"UPDATE licenses SET app_version = %s WHERE {'unique_identifier' if uid else 'key'} = %s",
+            (version_str, uid if uid else key)
+        )
+    except Exception:
+        pass  # non-critical, don't fail validation over a logging write
 
     days = lic["days"]
     if days != 0:
