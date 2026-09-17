@@ -165,7 +165,7 @@ def check_update():
             "latest_version": LATEST_VERSION
         })
 
-    download_url = f"https://github.com/{GITHUB_OWNER}/{GITHUB_REPO}/releases/download/{quote(GITHUB_RELEASE_TAG)}/{quote(LATEST_OBJECT_KEY)}"
+    download_url = f"{request.host_url.rstrip('/')}/download-update"
 
     return jsonify({
         "ok": True,
@@ -174,6 +174,44 @@ def check_update():
         "file_name": LATEST_OBJECT_KEY,
         "download_url": download_url
     })
+
+
+@app.route("/download-update", methods=["GET"])
+def download_update():
+    """
+    Redirects the client to GitHub's actual signed CDN URL instead of
+    proxying the file's bytes through this server. GitHub's release-asset
+    endpoint (/releases/download/...) 404s on requests with no User-Agent
+    header — exactly what the currently-installed client sends — but that
+    endpoint is itself just a redirect to a short-lived signed URL on
+    objects.githubusercontent.com, which doesn't check User-Agent at all.
+    So: fetch just the redirect target here (a few bytes, not the file),
+    then send the client a 302 to that real URL. The actual 200MB+ transfer
+    happens directly between the client and GitHub's CDN — zero bandwidth
+    cost on this server. Once a client build ships with the User-Agent fix
+    in updater.py, this route becomes unnecessary and download_url can
+    point straight at GitHub (or R2, once that's fixed) again.
+    """
+    github_url = f"https://github.com/{GITHUB_OWNER}/{GITHUB_REPO}/releases/download/{quote(GITHUB_RELEASE_TAG)}/{quote(LATEST_OBJECT_KEY)}"
+    try:
+        # allow_redirects=False so we only capture the Location header,
+        # never download the actual file body ourselves.
+        resp = _requests.get(
+            github_url,
+            headers={"User-Agent": "ShiroNC-Server/1.0"},
+            allow_redirects=False,
+            timeout=15
+        )
+        if resp.status_code in (301, 302, 303, 307, 308) and "Location" in resp.headers:
+            real_url = resp.headers["Location"]
+        else:
+            # Unexpected — GitHub didn't redirect as expected. Fail loudly
+            # rather than silently serving nothing.
+            return jsonify({"error": f"unexpected upstream status {resp.status_code}"}), 502
+    except Exception as e:
+        return jsonify({"error": f"upstream fetch failed: {e}"}), 502
+
+    return "", 302, {"Location": real_url}
 
 
 @app.route("/broadcast", methods=["GET"])
