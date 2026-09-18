@@ -114,13 +114,30 @@ $("#quick-add-form").addEventListener("submit", async (e) => {
   const key = $("#qa-key").value.trim();
   const days = Number($("#qa-days").value);
   const customer_name = $("#qa-customer").value.trim();
+  const email = $("#qa-email").value.trim();
   const resultEl = $("#quick-add-result");
   try {
-    const res = await api("api/licenses", { method: "POST", body: JSON.stringify({ key, days, customer_name }) });
-    resultEl.textContent = `Created: ${res.key}`;
-    resultEl.className = "field-note is-success";
+    const res = await api("api/licenses", {
+      method: "POST",
+      body: JSON.stringify({ key, days, customer_name, email }),
+    });
+
+    let msg = `Created: ${res.key}`;
+    let isError = false;
+    if (email) {
+      if (res.email_sent && res.email_sent.ok) {
+        msg += " — onboarding email sent";
+      } else {
+        msg += ` — email failed: ${(res.email_sent && res.email_sent.error) || "unknown error"}`;
+        isError = true;
+      }
+    }
+    resultEl.textContent = msg;
+    resultEl.className = isError ? "field-note is-error" : "field-note is-success";
+
     $("#qa-key").value = "";
     $("#qa-customer").value = "";
+    $("#qa-email").value = "";
     loadDashboard();
   } catch (err) {
     resultEl.textContent = err.message;
