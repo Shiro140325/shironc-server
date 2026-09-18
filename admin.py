@@ -39,6 +39,16 @@ its own tiny Flask app on that subdomain). Nothing inside this file needs
 to change — every API call the frontend makes is a *relative* path.
 
 --------------------------------------------------------------------------
+ONE-TIME DB MIGRATION (customer name on licenses)
+--------------------------------------------------------------------------
+Run this once against your Neon database (SQL editor in the Neon console,
+or `psql`) before the "Customer" field in the panel will work:
+
+    ALTER TABLE licenses ADD COLUMN IF NOT EXISTS customer_name TEXT;
+
+Everything else (list/create/update) already reads and writes this column.
+
+--------------------------------------------------------------------------
 ADDING NEW FEATURES LATER
 --------------------------------------------------------------------------
 1. Add a new @admin_bp.route(...) function down in the "API ROUTES" section.
@@ -244,11 +254,11 @@ def _license_status(lic):
 @admin_bp.route("/api/licenses", methods=["GET"])
 @login_required
 def list_licenses():
-    search = request.args.get("q", "").strip().upper()
+    search = request.args.get("q", "").strip()
     if search:
         rows = db_execute(
-            "SELECT * FROM licenses WHERE key ILIKE %s ORDER BY key",
-            (f"%{search}%",),
+            "SELECT * FROM licenses WHERE key ILIKE %s OR customer_name ILIKE %s ORDER BY key",
+            (f"%{search.upper()}%", f"%{search}%"),
             fetch="all",
         )
     else:
@@ -270,14 +280,16 @@ def create_license():
     if not key:
         key = "-".join(secrets.token_hex(2).upper() for _ in range(4))
     days = int(data.get("days", 90))
+    customer_name = (data.get("customer_name") or "").strip() or None
 
     existing = db_execute("SELECT key FROM licenses WHERE key = %s", (key,), fetch="one")
     if existing:
         return jsonify({"error": "a license with that key already exists"}), 409
 
     db_execute(
-        "INSERT INTO licenses (key, days, activated_at, device_id) VALUES (%s, %s, NULL, NULL)",
-        (key, days),
+        "INSERT INTO licenses (key, days, activated_at, device_id, customer_name) "
+        "VALUES (%s, %s, NULL, NULL, %s)",
+        (key, days, customer_name),
     )
     return jsonify({"ok": True, "key": key})
 
@@ -296,6 +308,10 @@ def update_license_route(key):
     if "days" in data:
         fields.append("days = %s")
         params.append(int(data["days"]))
+
+    if "customer_name" in data:
+        fields.append("customer_name = %s")
+        params.append((data.get("customer_name") or "").strip() or None)
 
     if data.get("reset_device"):
         fields.append("device_id = NULL")
