@@ -126,6 +126,25 @@ def get_min_version():
     return _min_version_cache["value"]
 
 
+# --- Cache warm-up ---------------------------------------------------------
+# Runs once at process start (module import time), inside an app context, so
+# /health below never has to touch Neon itself. If Neon is slow/suspended on
+# boot, this just logs and leaves the caches at their hardcoded defaults —
+# /health still serves 200 either way.
+def _warm_caches():
+    try:
+        get_min_version()
+        get_poll_config()
+        print("Cache warm-up OK: min_version + poll_config loaded from DB")
+    except Exception as e:
+        print("Cache warm-up failed, /health will serve hardcoded defaults until next successful DB call:", e)
+
+
+with app.app_context():
+    _warm_caches()
+# ---------------------------------------------------------------------------
+
+
 LATEST_VERSION = "1.18.7"
 LATEST_OBJECT_KEY = "Shiro NC 1.18.7.zip"  # ← confirm this matches the exact filename in your R2 bucket
 
@@ -232,10 +251,20 @@ def broadcast():
 
 @app.route("/health")
 def health():
-    # Left as a live check: the client uses this endpoint's 200/failure status
-    # to decide whether the server is up and to lock users out if it's down.
-    min_v = get_min_version()
-    cfg = get_poll_config()
+    # Pure liveness check — NEVER touches the DB, directly or indirectly.
+    # Previously this called get_min_version()/get_poll_config(), which on
+    # cache-miss triggered a fresh Neon connection; if Neon was suspended
+    # (autosuspend) or near its connection cap, that call stalled/failed and
+    # the client saw it as "server unreachable" even though Flask was alive
+    # the whole time (confirmed: 21 retries from one user's monitor log).
+    #
+    # This now reads the already-warmed module-level caches directly and
+    # never calls get_min_version()/get_poll_config() (which would trigger a
+    # DB call on a stale/cold cache). Falls back to hardcoded defaults if
+    # the cache is still empty (e.g. warm-up failed on boot) — either way,
+    # this always returns 200 immediately.
+    min_v = _min_version_cache["value"] or MIN_VERSION
+    cfg = _poll_config_cache["value"] or DEFAULT_POLL_CONFIG
     return jsonify({
         "status": "ok",
         "min_version": f"{min_v[0]}.{min_v[1]}.{min_v[2]}",
