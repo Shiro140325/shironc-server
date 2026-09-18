@@ -5,21 +5,21 @@
    ========================================================================== */
 
 :root {
-  --bg:            #0B0710;
-  --bg-elevated:   #120B18;
-  --surface:       #17101F;
-  --surface-2:     #1E1527;
-  --border:        #2A1E38;
-  --border-soft:   #211A2C;
+  --bg:            #1B1B1E;
+  --bg-elevated:   #212124;
+  --surface:       #252528;
+  --surface-2:     #2D2D31;
+  --border:        #3A3A3F;
+  --border-soft:   #313135;
 
-  --text:          #EEE7F6;
-  --text-dim:      #A497B8;
-  --text-faint:    #6E6280;
+  --text:          #F1F1F3;
+  --text-dim:      #ACACB2;
+  --text-faint:    #7A7A80;
 
   --magenta:       #E620A0;
   --magenta-bright:#FF4FC0;
-  --magenta-dim:   #7A1C60;
-  --magenta-wash:  rgba(230, 32, 160, 0.12);
+  --magenta-dim:   #6E4059;
+  --magenta-wash:  rgba(230, 32, 160, 0.10);
 
   --green:         #33C48A;
   --green-wash:    rgba(51, 196, 138, 0.12);
@@ -50,11 +50,15 @@ html, body {
   color: var(--text);
   font-family: var(--font-ui);
   -webkit-font-smoothing: antialiased;
+  /* Prevents any one oversized child (a wide table, a stretched button in
+     the mobile sidebar, etc.) from dragging the whole page into horizontal
+     scroll — that's what produces a "wall of blank space" on one side. */
+  overflow-x: hidden;
 }
 
 body {
   background-image:
-    radial-gradient(ellipse 900px 500px at 15% -10%, var(--magenta-wash), transparent 60%);
+    radial-gradient(ellipse 900px 500px at 15% -10%, var(--magenta-wash), transparent 65%);
   background-attachment: fixed;
   min-height: 100vh;
 }
@@ -237,7 +241,9 @@ textarea { resize: vertical; }
 
 .main {
   padding: 32px 40px 60px;
-  max-width: 980px;
+  max-width: 1100px;
+  margin: 0 auto;
+  width: 100%;
 }
 
 .view { display: none; }
@@ -343,7 +349,7 @@ textarea { resize: vertical; }
   background: var(--surface);
   border: 1px solid var(--border);
   border-radius: var(--radius-md);
-  overflow: hidden;
+  overflow-x: auto;
 }
 .table { width: 100%; border-collapse: collapse; font-size: 13.5px; }
 .table th {
@@ -436,10 +442,15 @@ textarea { resize: vertical; }
     align-items: center;
     overflow-x: auto;
   }
-  .nav { flex-direction: row; }
-  .main { padding: 24px 18px 60px; }
+  .nav { flex-direction: row; flex: none; }
+  /* .btn-block's width:100% is meant for the vertical desktop sidebar;
+     inside this row layout it would otherwise blow the logout button up
+     to try to fill the whole row, forcing the sidebar wildly wide. */
+  .sidebar .btn-block { width: auto; flex-shrink: 0; }
+  .main { padding: 24px 18px 60px; max-width: 100%; }
   .stat-grid { grid-template-columns: repeat(2, 1fr); }
   .field-grid { grid-template-columns: 1fr; }
+  .inline-form { flex-direction: column; align-items: stretch; }
 }
 
 @media (prefers-reduced-motion: reduce) {
