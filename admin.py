@@ -421,9 +421,6 @@ def set_release():
     release = {
         "latest_version": (data.get("latest_version") or "").strip(),
         "object_key": (data.get("object_key") or "").strip(),
-        "github_owner": (data.get("github_owner") or "").strip(),
-        "github_repo": (data.get("github_repo") or "").strip(),
-        "github_release_tag": (data.get("github_release_tag") or "").strip(),
     }
     if not release["latest_version"]:
         return jsonify({"error": "latest_version required"}), 400
