@@ -5,21 +5,21 @@
    ========================================================================== */
 
 :root {
-  --bg:            #1B1B1E;
-  --bg-elevated:   #212124;
-  --surface:       #252528;
-  --surface-2:     #2D2D31;
-  --border:        #3A3A3F;
-  --border-soft:   #313135;
+  --bg:            #2A2A2D;
+  --bg-elevated:   #303033;
+  --surface:       #353538;
+  --surface-2:     #3D3D40;
+  --border:        #4A4A4E;
+  --border-soft:   #404044;
 
   --text:          #F1F1F3;
   --text-dim:      #ACACB2;
-  --text-faint:    #7A7A80;
+  --text-faint:    #8A8A90;
 
-  --magenta:       #E620A0;
-  --magenta-bright:#FF4FC0;
-  --magenta-dim:   #6E4059;
-  --magenta-wash:  rgba(230, 32, 160, 0.10);
+  --magenta:       #E8E8EA;
+  --magenta-bright:#FFFFFF;
+  --magenta-dim:   #6A6A6E;
+  --magenta-wash:  rgba(255, 255, 255, 0.08);
 
   --green:         #33C48A;
   --green-wash:    rgba(51, 196, 138, 0.12);
