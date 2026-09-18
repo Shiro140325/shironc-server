@@ -97,10 +97,15 @@
 
       <div class="panel">
         <h3>Quick add license</h3>
+        <p class="panel-note">Fill in Email to also send the onboarding email (product details + download link + this license key) via Resend, using whatever's currently set in the Release tab.</p>
         <form id="quick-add-form" class="inline-form">
           <div class="field">
             <label for="qa-customer">Customer name <span class="hint">(optional)</span></label>
             <input id="qa-customer" type="text" placeholder="Jane Doe">
+          </div>
+          <div class="field">
+            <label for="qa-email">Email <span class="hint">(optional — sends onboarding email)</span></label>
+            <input id="qa-email" type="email" placeholder="customer@example.com">
           </div>
           <div class="field">
             <label for="qa-key">Key <span class="hint">(blank = auto-generate)</span></label>
@@ -176,7 +181,7 @@
     <section class="view" data-view="release">
       <header class="view-header">
         <h2>Release &amp; minimum version</h2>
-        <p class="view-sub">Controls what <code>/check-update</code> and <code>/validate</code> tell clients.</p>
+        <p class="view-sub">Controls what <code>/check-update</code> and <code>/validate</code> tell clients — and what the onboarding email links to.</p>
       </header>
 
       <div class="panel">
@@ -194,7 +199,7 @@
 
       <div class="panel">
         <h3>Latest release</h3>
-        <p class="panel-note">Served to clients checking for updates via <code>/check-update</code>. This just tells clients which version and R2 file name are current — upload the zip to your R2 bucket first, then set these to match.</p>
+        <p class="panel-note">Served to clients checking for updates via <code>/check-update</code>, and used to build the onboarding email's download link. Upload the zip to R2 first, then set these to match.</p>
         <form id="release-form">
           <div class="field-grid">
             <div class="field">
