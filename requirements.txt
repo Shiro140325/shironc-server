@@ -4,3 +4,4 @@ supabase
 requests
 httpx
 psycopg2-binary
+resend
