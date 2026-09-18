@@ -360,6 +360,7 @@ async function loadRelease() {
     const { release } = await api("api/release");
     $("#rel-version").value = release.latest_version || "";
     $("#rel-object-key").value = release.object_key || "";
+    $("#rel-installer-key").value = release.installer_object_key || "";
   } catch (err) {
     toast(err.message, true);
   }
@@ -374,6 +375,7 @@ $("#release-form").addEventListener("submit", async (e) => {
       body: JSON.stringify({
         latest_version: $("#rel-version").value.trim(),
         object_key: $("#rel-object-key").value.trim(),
+        installer_object_key: $("#rel-installer-key").value.trim(),
       }),
     });
     resultEl.textContent = "Saved.";
