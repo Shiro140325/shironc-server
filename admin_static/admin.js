@@ -343,9 +343,6 @@ async function loadRelease() {
     const { release } = await api("api/release");
     $("#rel-version").value = release.latest_version || "";
     $("#rel-object-key").value = release.object_key || "";
-    $("#rel-owner").value = release.github_owner || "";
-    $("#rel-repo").value = release.github_repo || "";
-    $("#rel-tag").value = release.github_release_tag || "";
   } catch (err) {
     toast(err.message, true);
   }
@@ -360,9 +357,6 @@ $("#release-form").addEventListener("submit", async (e) => {
       body: JSON.stringify({
         latest_version: $("#rel-version").value.trim(),
         object_key: $("#rel-object-key").value.trim(),
-        github_owner: $("#rel-owner").value.trim(),
-        github_repo: $("#rel-repo").value.trim(),
-        github_release_tag: $("#rel-tag").value.trim(),
       }),
     });
     resultEl.textContent = "Saved.";
