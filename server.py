@@ -13,7 +13,8 @@ from flask import Flask, request, jsonify
 import psycopg2
 import psycopg2.extras
 import psycopg2.pool
-from psycopg2 import OperationalError, InterfaceError, PoolError
+from psycopg2 import OperationalError, InterfaceError
+from psycopg2.pool import PoolError
 
 app = Flask(__name__)
 
