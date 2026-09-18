@@ -1,0 +1,299 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Shiro NC — Control</title>
+<link rel="icon" href="data:,">
+<link rel="stylesheet" href="assets/admin.css">
+</head>
+<body>
+
+<!-- ===================== LOGIN SCREEN ===================== -->
+<section id="login-screen" class="login-screen">
+  <div class="login-card">
+    <div class="brand">
+      <svg class="brand-mark" viewBox="0 0 48 24" aria-hidden="true">
+        <rect x="0"  y="9"  width="3" height="6"></rect>
+        <rect x="6"  y="4"  width="3" height="16"></rect>
+        <rect x="12" y="0"  width="3" height="24"></rect>
+        <rect x="18" y="6"  width="3" height="12"></rect>
+        <rect x="24" y="10" width="3" height="4"></rect>
+        <rect x="30" y="2"  width="3" height="20"></rect>
+        <rect x="36" y="7"  width="3" height="10"></rect>
+        <rect x="42" y="10" width="3" height="4"></rect>
+      </svg>
+      <div>
+        <h1>Shiro NC</h1>
+        <p class="brand-sub">Control</p>
+      </div>
+    </div>
+    <form id="login-form">
+      <label for="password">Password</label>
+      <input id="password" type="password" autocomplete="current-password" autofocus required>
+      <button type="submit" class="btn btn-primary btn-block">Sign in</button>
+      <p id="login-error" class="field-error" hidden></p>
+    </form>
+  </div>
+</section>
+
+<!-- ===================== APP SHELL ===================== -->
+<div id="app-shell" class="app-shell" hidden>
+
+  <aside class="sidebar">
+    <div class="brand brand-compact">
+      <svg class="brand-mark" viewBox="0 0 48 24" aria-hidden="true">
+        <rect x="0"  y="9"  width="3" height="6"></rect>
+        <rect x="6"  y="4"  width="3" height="16"></rect>
+        <rect x="12" y="0"  width="3" height="24"></rect>
+        <rect x="18" y="6"  width="3" height="12"></rect>
+        <rect x="24" y="10" width="3" height="4"></rect>
+        <rect x="30" y="2"  width="3" height="20"></rect>
+        <rect x="36" y="7"  width="3" height="10"></rect>
+        <rect x="42" y="10" width="3" height="4"></rect>
+      </svg>
+      <div>
+        <h1>Shiro NC</h1>
+        <p class="brand-sub">Control</p>
+      </div>
+    </div>
+
+    <nav class="nav" id="nav">
+      <button class="nav-item is-active" data-view="dashboard">
+        <span>Dashboard</span>
+      </button>
+      <button class="nav-item" data-view="licenses">
+        <span>Licenses</span>
+      </button>
+      <button class="nav-item" data-view="broadcast">
+        <span>Broadcast</span>
+      </button>
+      <button class="nav-item" data-view="release">
+        <span>Release</span>
+      </button>
+      <button class="nav-item" data-view="poll">
+        <span>Client polling</span>
+      </button>
+    </nav>
+
+    <button id="logout-btn" class="btn btn-ghost btn-block">Sign out</button>
+  </aside>
+
+  <main class="main">
+
+    <!-- ---------- Dashboard ---------- -->
+    <section class="view is-active" data-view="dashboard">
+      <header class="view-header">
+        <h2>Dashboard</h2>
+        <p class="view-sub">Live status of licenses and the server config clients are reading right now.</p>
+      </header>
+
+      <div class="stat-grid" id="stat-grid">
+        <div class="stat-card"><span class="stat-value" data-stat="total_licenses">—</span><span class="stat-label">Total licenses</span></div>
+        <div class="stat-card stat-accent"><span class="stat-value" data-stat="active_licenses">—</span><span class="stat-label">Active</span></div>
+        <div class="stat-card"><span class="stat-value" data-stat="unactivated_licenses">—</span><span class="stat-label">Unactivated</span></div>
+        <div class="stat-card stat-warn"><span class="stat-value" data-stat="expired_licenses">—</span><span class="stat-label">Expired</span></div>
+      </div>
+
+      <div class="panel">
+        <h3>Quick add license</h3>
+        <form id="quick-add-form" class="inline-form">
+          <div class="field">
+            <label for="qa-key">Key <span class="hint">(blank = auto-generate)</span></label>
+            <input id="qa-key" type="text" placeholder="XXXX-XXXX-XXXX-XXXX">
+          </div>
+          <div class="field field-narrow">
+            <label for="qa-days">Days <span class="hint">(0 = unlimited, negative = minutes)</span></label>
+            <input id="qa-days" type="number" value="90" required>
+          </div>
+          <button type="submit" class="btn btn-primary">Add license</button>
+        </form>
+        <p id="quick-add-result" class="field-note"></p>
+      </div>
+    </section>
+
+    <!-- ---------- Licenses ---------- -->
+    <section class="view" data-view="licenses">
+      <header class="view-header">
+        <h2>Licenses</h2>
+        <p class="view-sub">Search, create, extend, reset devices on, or remove license keys.</p>
+      </header>
+
+      <div class="toolbar">
+        <input id="license-search" type="search" placeholder="Search by key…" class="search-input">
+        <button id="license-refresh" class="btn btn-ghost">Refresh</button>
+        <button id="license-new-btn" class="btn btn-primary">New license</button>
+      </div>
+
+      <div class="table-wrap">
+        <table class="table" id="license-table">
+          <thead>
+            <tr>
+              <th>Key</th>
+              <th>Status</th>
+              <th>Days</th>
+              <th>Activated</th>
+              <th>Device</th>
+              <th>App version</th>
+              <th class="col-actions">Actions</th>
+            </tr>
+          </thead>
+          <tbody id="license-tbody">
+            <tr><td colspan="7" class="table-empty">Loading…</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </section>
+
+    <!-- ---------- Broadcast ---------- -->
+    <section class="view" data-view="broadcast">
+      <header class="view-header">
+        <h2>Broadcast message</h2>
+        <p class="view-sub">Shown to every connected client via <code>/broadcast</code>. Clients poll this roughly every few minutes — clear it when you're done.</p>
+      </header>
+
+      <div class="panel">
+        <form id="broadcast-form">
+          <div class="field">
+            <label for="broadcast-text">Message</label>
+            <textarea id="broadcast-text" rows="4" placeholder="e.g. Scheduled maintenance tonight at 11 PM UTC — recordings in progress won't be interrupted."></textarea>
+          </div>
+          <div class="btn-row">
+            <button type="submit" class="btn btn-primary">Publish</button>
+            <button type="button" id="broadcast-clear" class="btn btn-ghost">Clear message</button>
+          </div>
+          <p id="broadcast-result" class="field-note"></p>
+        </form>
+      </div>
+    </section>
+
+    <!-- ---------- Release ---------- -->
+    <section class="view" data-view="release">
+      <header class="view-header">
+        <h2>Release &amp; minimum version</h2>
+        <p class="view-sub">Controls what <code>/check-update</code> and <code>/validate</code> tell clients.</p>
+      </header>
+
+      <div class="panel">
+        <h3>Minimum version</h3>
+        <p class="panel-note">Clients below this version are rejected at <code>/validate</code>.</p>
+        <form id="min-version-form" class="inline-form">
+          <div class="field field-narrow">
+            <label for="min-version-input">Min version</label>
+            <input id="min-version-input" type="text" placeholder="1.16.1" pattern="^\d+\.\d+\.\d+$">
+          </div>
+          <button type="submit" class="btn btn-primary">Save</button>
+        </form>
+        <p id="min-version-result" class="field-note"></p>
+      </div>
+
+      <div class="panel">
+        <h3>Latest release</h3>
+        <p class="panel-note">Served to clients checking for updates. Currently sourced from GitHub Releases.</p>
+        <form id="release-form">
+          <div class="field-grid">
+            <div class="field">
+              <label for="rel-version">Latest version</label>
+              <input id="rel-version" type="text" placeholder="1.18.7" pattern="^\d+\.\d+\.\d+$" required>
+            </div>
+            <div class="field">
+              <label for="rel-object-key">Release file name</label>
+              <input id="rel-object-key" type="text" placeholder="Shiro.NC.1.18.7.zip">
+            </div>
+            <div class="field">
+              <label for="rel-owner">GitHub owner</label>
+              <input id="rel-owner" type="text" placeholder="Shiro140325">
+            </div>
+            <div class="field">
+              <label for="rel-repo">GitHub repo</label>
+              <input id="rel-repo" type="text" placeholder="shironc-releases">
+            </div>
+            <div class="field">
+              <label for="rel-tag">GitHub release tag</label>
+              <input id="rel-tag" type="text" placeholder="v1.18.7">
+            </div>
+          </div>
+          <div class="btn-row">
+            <button type="submit" class="btn btn-primary">Save release info</button>
+          </div>
+          <p id="release-result" class="field-note"></p>
+          <p class="panel-note panel-note-dim">Saved here for reference and future use — see the integration notes if you want <code>server.py</code> to read these live instead of its hardcoded constants.</p>
+        </form>
+      </div>
+    </section>
+
+    <!-- ---------- Poll config ---------- -->
+    <section class="view" data-view="poll">
+      <header class="view-header">
+        <h2>Client polling</h2>
+        <p class="view-sub">Retune how often installed clients check in — no client build required.</p>
+      </header>
+
+      <div class="panel">
+        <form id="poll-form">
+          <div class="field-grid">
+            <div class="field">
+              <label for="poll-license">License poll interval <span class="hint">(sec)</span></label>
+              <input id="poll-license" type="number" min="1">
+            </div>
+            <div class="field">
+              <label for="poll-monitor">Monitor interval <span class="hint">(sec)</span></label>
+              <input id="poll-monitor" type="number" min="1">
+            </div>
+            <div class="field">
+              <label for="poll-shadow">Shadow-check every <span class="hint">(Nth poll)</span></label>
+              <input id="poll-shadow" type="number" min="1">
+            </div>
+            <div class="field">
+              <label for="poll-failure">Failure threshold <span class="hint">(heartbeats)</span></label>
+              <input id="poll-failure" type="number" min="1">
+            </div>
+          </div>
+          <div class="btn-row">
+            <button type="submit" class="btn btn-primary">Save polling config</button>
+          </div>
+          <p id="poll-result" class="field-note"></p>
+        </form>
+      </div>
+    </section>
+
+  </main>
+</div>
+
+<!-- ===================== License editor modal ===================== -->
+<div id="license-modal" class="modal-backdrop" hidden>
+  <div class="modal">
+    <h3 id="license-modal-title">Edit license</h3>
+    <form id="license-modal-form">
+      <input type="hidden" id="lm-key-original">
+      <div class="field">
+        <label for="lm-key">Key</label>
+        <input id="lm-key" type="text" placeholder="blank = auto-generate">
+      </div>
+      <div class="field">
+        <label for="lm-days">Days <span class="hint">(0 = unlimited, negative = minutes, for testing)</span></label>
+        <input id="lm-days" type="number" required>
+      </div>
+      <label class="checkbox-row">
+        <input type="checkbox" id="lm-reset-device">
+        <span>Reset device lock <span class="hint">(lets it be activated on a new device)</span></span>
+      </label>
+      <label class="checkbox-row">
+        <input type="checkbox" id="lm-reset-activation">
+        <span>Reset activation <span class="hint">(clears activation date + device, restarts the clock)</span></span>
+      </label>
+      <div class="btn-row">
+        <button type="button" id="lm-cancel" class="btn btn-ghost">Cancel</button>
+        <button type="submit" class="btn btn-primary" id="lm-submit">Save</button>
+        <button type="button" id="lm-delete" class="btn btn-danger" hidden>Delete license</button>
+      </div>
+      <p id="license-modal-result" class="field-note"></p>
+    </form>
+  </div>
+</div>
+
+<div id="toast" class="toast" hidden></div>
+
+<script src="assets/admin.js"></script>
+</body>
+</html>
