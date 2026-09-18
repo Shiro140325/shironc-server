@@ -12,6 +12,8 @@ BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 from flask import Flask, request, jsonify
 import psycopg2
 import psycopg2.extras
+import psycopg2.pool
+from psycopg2 import OperationalError, InterfaceError, PoolError
 
 app = Flask(__name__)
 
@@ -21,35 +23,68 @@ app.register_blueprint(admin_bp)
 
 NEON_DATABASE_URL = os.environ.get("NEON_DATABASE_URL")
 
+# --- Connection pooling (paid tier still benefits from reuse) ---
+_connection_pool = None
+
+
+def get_pool():
+    global _connection_pool
+    if _connection_pool is None:
+        _connection_pool = psycopg2.pool.ThreadedConnectionPool(
+            minconn=2,
+            maxconn=20,
+            dsn=NEON_DATABASE_URL,
+            cursor_factory=psycopg2.extras.RealDictCursor,
+        )
+    return _connection_pool
+
 
 def get_conn():
-    return psycopg2.connect(NEON_DATABASE_URL, cursor_factory=psycopg2.extras.RealDictCursor)
+    return get_pool().getconn()
 
 
-def db_execute(query, params=None, fetch=None, retries=2):
+def release_conn(conn):
+    get_pool().putconn(conn)
+
+
+def db_execute(query, params=None, fetch=None, retries=3):
     """
     fetch: None (no return), "one" (fetchone), "all" (fetchall)
     """
     last_err = None
     for attempt in range(retries + 1):
+        conn = None
         try:
-            with get_conn() as conn:
-                with conn.cursor() as cur:
-                    cur.execute(query, params or ())
-                    if fetch == "one":
-                        result = cur.fetchone()
-                    elif fetch == "all":
-                        result = cur.fetchall()
-                    else:
-                        result = None
-                    conn.commit()
-                    return result
-        except psycopg2.OperationalError as e:
+            conn = get_conn()
+            conn.set_session(autocommit=True)
+            with conn.cursor() as cur:
+                cur.execute("SET statement_timeout = '5000'")
+                cur.execute(query, params or ())
+                if fetch == "one":
+                    result = cur.fetchone()
+                elif fetch == "all":
+                    result = cur.fetchall()
+                else:
+                    result = None
+            conn.commit()
+            return result
+        except (OperationalError, InterfaceError, PoolError, TimeoutError) as e:
             last_err = e
+            if conn:
+                try:
+                    conn.rollback()
+                except Exception:
+                    pass
             if attempt == retries:
                 raise
-            time.sleep(0.2 * (attempt + 1))
-            continue
+            # Exponential backoff: 1.5s, 2.25s, 3.375s
+            time.sleep(1.5 ** attempt)
+        finally:
+            if conn:
+                try:
+                    release_conn(conn)
+                except Exception:
+                    pass
     raise last_err
 
 
@@ -64,11 +99,6 @@ _broadcast_cache = {"value": "", "ts": 0}
 _BROADCAST_TTL = 600  # 10 min
 
 # --- server-driven polling config (cached like min_version) ---
-# Lets you retune client polling behavior (license poll interval, heartbeat
-# interval, shadow-check frequency, failure threshold before lockdown)
-# without shipping a new client build. Change via:
-#   INSERT INTO app_config (key, value) VALUES ('poll_config', '{"license_poll_interval": 30, ...}')
-#   ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value;
 _poll_config_cache = {"value": None, "ts": 0}
 _POLL_CONFIG_TTL = 1800  # 30 min
 
@@ -127,10 +157,6 @@ def get_min_version():
 
 
 # --- Cache warm-up ---------------------------------------------------------
-# Runs once at process start (module import time), inside an app context, so
-# /health below never has to touch Neon itself. If Neon is slow/suspended on
-# boot, this just logs and leaves the caches at their hardcoded defaults —
-# /health still serves 200 either way.
 def _warm_caches():
     try:
         get_min_version()
@@ -144,29 +170,15 @@ with app.app_context():
     _warm_caches()
 # ---------------------------------------------------------------------------
 
-
 LATEST_VERSION = "1.18.7"
 LATEST_OBJECT_KEY = "Shiro NC 1.18.7.zip"  # ← confirm this matches the exact filename in your R2 bucket
 
 # --- Update source config ---
-# Back on R2 now that updates.shironc.com resolves correctly again.
-# GitHub Releases constants kept below (commented out) as a fallback in
-# case R2 acts up again — see the /download-update-github route below,
-# also currently disabled, for the zero-bandwidth redirect trick.
 R2_PUBLIC_BASE_URL = "https://updates.shironc.com"
 
-# GITHUB_OWNER = "Shiro140325"
-# GITHUB_REPO = "shironc-releases"
-# GITHUB_RELEASE_TAG = "v1.18.7"
-
-
-def _parse_version_list(v: str) -> list:
-    v = v.lstrip("vV")
-    return [int(x) if x.isdigit() else 0 for x in v.split(".")]
-
-
+DEFAULT_PARSE_VERSION_LIST = lambda v: [int(x) if x.isdigit() else 0 for x in v.lstrip("vV").split(".")]
 def _is_newer(a: str, b: str) -> bool:
-    av, bv = _parse_version_list(a), _parse_version_list(b)
+    av, bv = DEFAULT_PARSE_VERSION_LIST(a), DEFAULT_PARSE_VERSION_LIST(b)
     for ai, bi in zip_longest(av, bv, fillvalue=0):
         if ai > bi:
             return True
@@ -198,44 +210,6 @@ def check_update():
     })
 
 
-# --- DISABLED: GitHub redirect fallback ---
-# Kept here, inactive, in case R2's custom domain breaks again. To use:
-# uncomment this route, uncomment the GITHUB_* constants above, and point
-# download_url in check_update() at f"{request.host_url.rstrip('/')}/download-update-github"
-# instead of the R2 URL.
-#
-# @app.route("/download-update-github", methods=["GET"])
-# def download_update_github():
-#     """
-#     Redirects the client to GitHub's actual signed CDN URL instead of
-#     proxying the file's bytes through this server. GitHub's release-asset
-#     endpoint (/releases/download/...) 404s on requests with no User-Agent
-#     header — exactly what the currently-installed client sends — but that
-#     endpoint is itself just a redirect to a short-lived signed URL on
-#     objects.githubusercontent.com, which doesn't check User-Agent at all.
-#     So: fetch just the redirect target here (a few bytes, not the file),
-#     then send the client a 302 to that real URL. The actual file transfer
-#     happens directly between the client and GitHub's CDN — zero bandwidth
-#     cost on this server.
-#     """
-#     github_url = f"https://github.com/{GITHUB_OWNER}/{GITHUB_REPO}/releases/download/{quote(GITHUB_RELEASE_TAG)}/{quote(LATEST_OBJECT_KEY)}"
-#     try:
-#         resp = _requests.get(
-#             github_url,
-#             headers={"User-Agent": "ShiroNC-Server/1.0"},
-#             allow_redirects=False,
-#             timeout=15
-#         )
-#         if resp.status_code in (301, 302, 303, 307, 308) and "Location" in resp.headers:
-#             real_url = resp.headers["Location"]
-#         else:
-#             return jsonify({"error": f"unexpected upstream status {resp.status_code}"}), 502
-#     except Exception as e:
-#         return jsonify({"error": f"upstream fetch failed: {e}"}), 502
-#
-#     return "", 302, {"Location": real_url}
-
-
 @app.route("/broadcast", methods=["GET"])
 def broadcast():
     now = time.time()
@@ -244,25 +218,13 @@ def broadcast():
             row = db_execute("SELECT value FROM app_config WHERE key = %s", ("broadcast_message",), fetch="one")
             _broadcast_cache["value"] = row["value"] if row else ""
         except Exception:
-            pass  # keep serving last cached value on a transient DB error
+            pass
         _broadcast_cache["ts"] = now
     return jsonify({"message": _broadcast_cache["value"]}), 200
 
 
 @app.route("/health")
 def health():
-    # Pure liveness check — NEVER touches the DB, directly or indirectly.
-    # Previously this called get_min_version()/get_poll_config(), which on
-    # cache-miss triggered a fresh Neon connection; if Neon was suspended
-    # (autosuspend) or near its connection cap, that call stalled/failed and
-    # the client saw it as "server unreachable" even though Flask was alive
-    # the whole time (confirmed: 21 retries from one user's monitor log).
-    #
-    # This now reads the already-warmed module-level caches directly and
-    # never calls get_min_version()/get_poll_config() (which would trigger a
-    # DB call on a stale/cold cache). Falls back to hardcoded defaults if
-    # the cache is still empty (e.g. warm-up failed on boot) — either way,
-    # this always returns 200 immediately.
     min_v = _min_version_cache["value"] or MIN_VERSION
     cfg = _poll_config_cache["value"] or DEFAULT_POLL_CONFIG
     return jsonify({
@@ -389,7 +351,7 @@ def validate():
     if uid:
         lic = get_license_by_uid(uid)
         if not lic:
-            return jsonify({"error": "Invalid"}), 400  # superseded by a newer device registration
+            return jsonify({"error": "Invalid"}), 400
     else:
         lic = get_license(key)
         if not lic:
@@ -442,8 +404,7 @@ def device_register():
     if lic.get("unique_identifier") and lic["device_id"] == device:
         return jsonify({"unique_identifier": lic["unique_identifier"]}), 200
 
-    # New device — issue a fresh UID, overwrite the old one (this is what kicks
-    # any previously-registered device on its next /validate call)
+    # New device — issue a fresh UID, overwrite the old one
     uid = str(uuid.uuid4())
     db_execute(
         "UPDATE licenses SET unique_identifier = %s, device_id = %s, activated_at = %s WHERE key = %s",
