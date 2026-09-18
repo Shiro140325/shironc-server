@@ -99,6 +99,10 @@
         <h3>Quick add license</h3>
         <form id="quick-add-form" class="inline-form">
           <div class="field">
+            <label for="qa-customer">Customer name <span class="hint">(optional)</span></label>
+            <input id="qa-customer" type="text" placeholder="Jane Doe">
+          </div>
+          <div class="field">
             <label for="qa-key">Key <span class="hint">(blank = auto-generate)</span></label>
             <input id="qa-key" type="text" placeholder="XXXX-XXXX-XXXX-XXXX">
           </div>
@@ -120,7 +124,7 @@
       </header>
 
       <div class="toolbar">
-        <input id="license-search" type="search" placeholder="Search by key…" class="search-input">
+        <input id="license-search" type="search" placeholder="Search by key or customer…" class="search-input">
         <button id="license-refresh" class="btn btn-ghost">Refresh</button>
         <button id="license-new-btn" class="btn btn-primary">New license</button>
       </div>
@@ -129,6 +133,7 @@
         <table class="table" id="license-table">
           <thead>
             <tr>
+              <th>Customer</th>
               <th>Key</th>
               <th>Status</th>
               <th>Days</th>
@@ -139,7 +144,7 @@
             </tr>
           </thead>
           <tbody id="license-tbody">
-            <tr><td colspan="7" class="table-empty">Loading…</td></tr>
+            <tr><td colspan="8" class="table-empty">Loading…</td></tr>
           </tbody>
         </table>
       </div>
@@ -266,6 +271,10 @@
     <h3 id="license-modal-title">Edit license</h3>
     <form id="license-modal-form">
       <input type="hidden" id="lm-key-original">
+      <div class="field">
+        <label for="lm-customer">Customer name <span class="hint">(optional)</span></label>
+        <input id="lm-customer" type="text" placeholder="Jane Doe">
+      </div>
       <div class="field">
         <label for="lm-key">Key</label>
         <input id="lm-key" type="text" placeholder="blank = auto-generate">
