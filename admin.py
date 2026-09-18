@@ -194,13 +194,13 @@ def _send_onboarding_email(to_email, license_key):
     except Exception:
         release = {}
 
-    object_key = release.get("object_key")
+    object_key = release.get("installer_object_key")
     version = release.get("latest_version", "")
 
     if not RESEND_API_KEY:
         return {"ok": False, "error": "RESEND_API_KEY not configured"}
     if not object_key or not R2_PUBLIC_BASE:
-        return {"ok": False, "error": "release info or R2_PUBLIC_BASE not configured"}
+        return {"ok": False, "error": "installer file name or R2_PUBLIC_BASE not configured"}
 
     download_url = f"{R2_PUBLIC_BASE}/{quote(object_key)}"
     html = render_onboarding_email(version, download_url, license_key)
@@ -496,6 +496,7 @@ def set_release():
     release = {
         "latest_version": (data.get("latest_version") or "").strip(),
         "object_key": (data.get("object_key") or "").strip(),
+        "installer_object_key": (data.get("installer_object_key") or "").strip(),
     }
     if not release["latest_version"]:
         return jsonify({"error": "latest_version required"}), 400
