@@ -127,19 +127,18 @@ def get_min_version():
 
 
 LATEST_VERSION = "1.18.7"
-LATEST_OBJECT_KEY = "Shiro.NC.1.18.7.zip"
+LATEST_OBJECT_KEY = "Shiro NC 1.18.7.zip"  # ← confirm this matches the exact filename in your R2 bucket
 
 # --- Update source config ---
-# TEMPORARY: serving updates from GitHub Releases while Cloudflare R2's
-# custom domain (updates.shironc.com) fails to propagate at the authoritative
-# nameserver level (confirmed via nslookup against cullen.ns.cloudflare.com —
-# NXDOMAIN despite dashboard showing Active). Revert to R2_PUBLIC_BASE_URL
-# once that's resolved — see commented-out line below.
-GITHUB_OWNER = "Shiro140325"      # ← set this
-GITHUB_REPO = "shironc-releases"              # ← set this
-GITHUB_RELEASE_TAG = "v1.18.7"               # ← must match the tag on the release
+# Back on R2 now that updates.shironc.com resolves correctly again.
+# GitHub Releases constants kept below (commented out) as a fallback in
+# case R2 acts up again — see the /download-update-github route below,
+# also currently disabled, for the zero-bandwidth redirect trick.
+R2_PUBLIC_BASE_URL = "https://updates.shironc.com"
 
-# R2_PUBLIC_BASE_URL = "https://updates.shironc.com"  # ← swap back to this once R2 is fixed
+# GITHUB_OWNER = "Shiro140325"
+# GITHUB_REPO = "shironc-releases"
+# GITHUB_RELEASE_TAG = "v1.18.7"
 
 
 def _parse_version_list(v: str) -> list:
@@ -169,7 +168,7 @@ def check_update():
             "latest_version": LATEST_VERSION
         })
 
-    download_url = f"{request.host_url.rstrip('/')}/download-update"
+    download_url = f"{R2_PUBLIC_BASE_URL}/{quote(LATEST_OBJECT_KEY)}"
 
     return jsonify({
         "ok": True,
@@ -180,42 +179,42 @@ def check_update():
     })
 
 
-@app.route("/download-update", methods=["GET"])
-def download_update():
-    """
-    Redirects the client to GitHub's actual signed CDN URL instead of
-    proxying the file's bytes through this server. GitHub's release-asset
-    endpoint (/releases/download/...) 404s on requests with no User-Agent
-    header — exactly what the currently-installed client sends — but that
-    endpoint is itself just a redirect to a short-lived signed URL on
-    objects.githubusercontent.com, which doesn't check User-Agent at all.
-    So: fetch just the redirect target here (a few bytes, not the file),
-    then send the client a 302 to that real URL. The actual 200MB+ transfer
-    happens directly between the client and GitHub's CDN — zero bandwidth
-    cost on this server. Once a client build ships with the User-Agent fix
-    in updater.py, this route becomes unnecessary and download_url can
-    point straight at GitHub (or R2, once that's fixed) again.
-    """
-    github_url = f"https://github.com/{GITHUB_OWNER}/{GITHUB_REPO}/releases/download/{quote(GITHUB_RELEASE_TAG)}/{quote(LATEST_OBJECT_KEY)}"
-    try:
-        # allow_redirects=False so we only capture the Location header,
-        # never download the actual file body ourselves.
-        resp = _requests.get(
-            github_url,
-            headers={"User-Agent": "ShiroNC-Server/1.0"},
-            allow_redirects=False,
-            timeout=15
-        )
-        if resp.status_code in (301, 302, 303, 307, 308) and "Location" in resp.headers:
-            real_url = resp.headers["Location"]
-        else:
-            # Unexpected — GitHub didn't redirect as expected. Fail loudly
-            # rather than silently serving nothing.
-            return jsonify({"error": f"unexpected upstream status {resp.status_code}"}), 502
-    except Exception as e:
-        return jsonify({"error": f"upstream fetch failed: {e}"}), 502
-
-    return "", 302, {"Location": real_url}
+# --- DISABLED: GitHub redirect fallback ---
+# Kept here, inactive, in case R2's custom domain breaks again. To use:
+# uncomment this route, uncomment the GITHUB_* constants above, and point
+# download_url in check_update() at f"{request.host_url.rstrip('/')}/download-update-github"
+# instead of the R2 URL.
+#
+# @app.route("/download-update-github", methods=["GET"])
+# def download_update_github():
+#     """
+#     Redirects the client to GitHub's actual signed CDN URL instead of
+#     proxying the file's bytes through this server. GitHub's release-asset
+#     endpoint (/releases/download/...) 404s on requests with no User-Agent
+#     header — exactly what the currently-installed client sends — but that
+#     endpoint is itself just a redirect to a short-lived signed URL on
+#     objects.githubusercontent.com, which doesn't check User-Agent at all.
+#     So: fetch just the redirect target here (a few bytes, not the file),
+#     then send the client a 302 to that real URL. The actual file transfer
+#     happens directly between the client and GitHub's CDN — zero bandwidth
+#     cost on this server.
+#     """
+#     github_url = f"https://github.com/{GITHUB_OWNER}/{GITHUB_REPO}/releases/download/{quote(GITHUB_RELEASE_TAG)}/{quote(LATEST_OBJECT_KEY)}"
+#     try:
+#         resp = _requests.get(
+#             github_url,
+#             headers={"User-Agent": "ShiroNC-Server/1.0"},
+#             allow_redirects=False,
+#             timeout=15
+#         )
+#         if resp.status_code in (301, 302, 303, 307, 308) and "Location" in resp.headers:
+#             real_url = resp.headers["Location"]
+#         else:
+#             return jsonify({"error": f"unexpected upstream status {resp.status_code}"}), 502
+#     except Exception as e:
+#         return jsonify({"error": f"upstream fetch failed: {e}"}), 502
+#
+#     return "", 302, {"Location": real_url}
 
 
 @app.route("/broadcast", methods=["GET"])
@@ -369,15 +368,16 @@ def validate():
         if lic["device_id"] != device:
             return jsonify({"error": "Invalid device"}), 403
 
-    # TEMP DEBUG: unconditional write to rule out the "only if changed" guard
-    # while diagnosing why app_version isn't updating. Revert once confirmed.
-    try:
-        db_execute(
-            f"UPDATE licenses SET app_version = %s WHERE {'unique_identifier' if uid else 'key'} = %s",
-            (version_str, uid if uid else key)
-        )
-    except Exception:
-        pass  # non-critical, don't fail validation over a logging write
+    # Only write the version-log update when it actually changed —
+    # avoids a DB write on every single /validate poll.
+    if lic.get("app_version") != version_str:
+        try:
+            db_execute(
+                f"UPDATE licenses SET app_version = %s WHERE {'unique_identifier' if uid else 'key'} = %s",
+                (version_str, uid if uid else key)
+            )
+        except Exception:
+            pass  # non-critical, don't fail validation over a logging write
 
     days = lic["days"]
     if days != 0:
