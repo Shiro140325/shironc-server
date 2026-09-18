@@ -113,12 +113,14 @@ $("#quick-add-form").addEventListener("submit", async (e) => {
   e.preventDefault();
   const key = $("#qa-key").value.trim();
   const days = Number($("#qa-days").value);
+  const customer_name = $("#qa-customer").value.trim();
   const resultEl = $("#quick-add-result");
   try {
-    const res = await api("api/licenses", { method: "POST", body: JSON.stringify({ key, days }) });
+    const res = await api("api/licenses", { method: "POST", body: JSON.stringify({ key, days, customer_name }) });
     resultEl.textContent = `Created: ${res.key}`;
     resultEl.className = "field-note is-success";
     $("#qa-key").value = "";
+    $("#qa-customer").value = "";
     loadDashboard();
   } catch (err) {
     resultEl.textContent = err.message;
@@ -132,25 +134,26 @@ let licensesCache = [];
 
 async function loadLicenses() {
   const tbody = $("#license-tbody");
-  tbody.innerHTML = `<tr><td colspan="7" class="table-empty">Loading…</td></tr>`;
+  tbody.innerHTML = `<tr><td colspan="8" class="table-empty">Loading…</td></tr>`;
   try {
     const q = $("#license-search").value.trim();
     const { licenses } = await api(`api/licenses${q ? `?q=${encodeURIComponent(q)}` : ""}`);
     licensesCache = licenses;
     renderLicenses(licenses);
   } catch (err) {
-    tbody.innerHTML = `<tr><td colspan="7" class="table-empty">${escapeHtml(err.message)}</td></tr>`;
+    tbody.innerHTML = `<tr><td colspan="8" class="table-empty">${escapeHtml(err.message)}</td></tr>`;
   }
 }
 
 function renderLicenses(licenses) {
   const tbody = $("#license-tbody");
   if (!licenses.length) {
-    tbody.innerHTML = `<tr><td colspan="7" class="table-empty">No licenses found.</td></tr>`;
+    tbody.innerHTML = `<tr><td colspan="8" class="table-empty">No licenses found.</td></tr>`;
     return;
   }
   tbody.innerHTML = licenses.map((lic) => `
     <tr>
+      <td>${lic.customer_name ? escapeHtml(lic.customer_name) : "—"}</td>
       <td class="key-cell">${escapeHtml(lic.key)}</td>
       <td><span class="badge badge-${lic.status}">${lic.status}</span></td>
       <td>${formatDays(lic.days)}</td>
@@ -202,6 +205,7 @@ function openLicenseModal(key) {
 
   $("#license-modal-title").textContent = isNew ? "New license" : `Edit ${key}`;
   $("#lm-key-original").value = isNew ? "" : key;
+  $("#lm-customer").value = isNew ? "" : (lic.customer_name || "");
   $("#lm-key").value = isNew ? "" : key;
   $("#lm-key").disabled = !isNew;
   $("#lm-days").value = isNew ? 90 : lic.days;
@@ -231,11 +235,13 @@ $("#license-modal-form").addEventListener("submit", async (e) => {
     if (isNew) {
       const key = $("#lm-key").value.trim();
       const days = Number($("#lm-days").value);
-      const res = await api("api/licenses", { method: "POST", body: JSON.stringify({ key, days }) });
+      const customer_name = $("#lm-customer").value.trim();
+      const res = await api("api/licenses", { method: "POST", body: JSON.stringify({ key, days, customer_name }) });
       toast(`License ${res.key} created`);
     } else {
       const payload = {
         days: Number($("#lm-days").value),
+        customer_name: $("#lm-customer").value.trim(),
         reset_device: $("#lm-reset-device").checked,
         reset_activation: $("#lm-reset-activation").checked,
       };
