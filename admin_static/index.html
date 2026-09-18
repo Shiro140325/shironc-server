@@ -199,7 +199,7 @@
 
       <div class="panel">
         <h3>Latest release</h3>
-        <p class="panel-note">Served to clients checking for updates via <code>/check-update</code>, and used to build the onboarding email's download link. Upload the zip to R2 first, then set these to match.</p>
+        <p class="panel-note">Served to clients checking for updates via <code>/check-update</code> — that flow expects a zip (auto-updater unzips + robocopies it in), so keep "Update zip file name" pointed at the zip. "Onboarding installer file name" is separate: it's the standalone .exe new customers get in the onboarding email, and never touches /check-update.</p>
         <form id="release-form">
           <div class="field-grid">
             <div class="field">
@@ -207,8 +207,12 @@
               <input id="rel-version" type="text" placeholder="1.18.7" pattern="^\d+\.\d+\.\d+$" required>
             </div>
             <div class="field">
-              <label for="rel-object-key">Release file name</label>
-              <input id="rel-object-key" type="text" placeholder="Shiro.NC.1.18.7.zip">
+              <label for="rel-object-key">Update zip file name</label>
+              <input id="rel-object-key" type="text" placeholder="Shiro NC 1.18.7.zip">
+            </div>
+            <div class="field">
+              <label for="rel-installer-key">Onboarding installer file name <span class="hint">(.exe, used in onboarding email)</span></label>
+              <input id="rel-installer-key" type="text" placeholder="Shiro NC Setup 1.18.7.exe">
             </div>
           </div>
           <div class="btn-row">
