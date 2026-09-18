@@ -15,6 +15,10 @@ import psycopg2.extras
 
 app = Flask(__name__)
 
+from admin import admin_bp, init_admin
+init_admin(app)
+app.register_blueprint(admin_bp)
+
 NEON_DATABASE_URL = os.environ.get("NEON_DATABASE_URL")
 
 
