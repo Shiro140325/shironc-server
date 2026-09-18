@@ -180,7 +180,6 @@ def me():
 # --------------------------------------------------------------------------
 
 @admin_bp.route("/", methods=["GET"])
-@admin_bp.route("", methods=["GET"])
 def admin_index():
     return send_from_directory(_STATIC_DIR, "index.html")
 
