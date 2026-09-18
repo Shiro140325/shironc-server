@@ -38,6 +38,11 @@
 
 * { box-sizing: border-box; }
 
+/* The hidden attribute must always win over any component's own display
+   rule below (.login-screen, .app-shell, .modal-backdrop etc. all set
+   their own display: flex/grid, which otherwise overrides [hidden]). */
+[hidden] { display: none !important; }
+
 html, body {
   margin: 0;
   padding: 0;
