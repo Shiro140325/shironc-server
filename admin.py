@@ -27,6 +27,22 @@ If ADMIN_PASSWORD is not set, it falls back to "changeme" and a big warning
 is printed to the server log on startup — change it before you deploy.
 
 --------------------------------------------------------------------------
+ONBOARDING EMAIL (Resend)
+--------------------------------------------------------------------------
+Set these env vars:
+
+    RESEND_API_KEY=re_xxxxxxxx
+    RESEND_FROM=Shiro NC <onboarding@shironc.com>   (domain must be verified in Resend;
+                                                      local part can be anything)
+    R2_PUBLIC_BASE=https://cdn.shironc.com          (public R2 bucket/custom domain base)
+
+When "Email" is filled in on the Quick add license form, creating the
+license also sends an onboarding email with the current release's download
+link (built from the Release tab's latest_version/object_key) and the new
+license key. Leaving the email field blank just creates the license as
+before — nothing else changes.
+
+--------------------------------------------------------------------------
 CHANGING THE URL LATER (shironc.com/admin/  ->  admin.shironc.com)
 --------------------------------------------------------------------------
 Everything is driven by ADMIN_URL_PREFIX (default "/admin"). When you move
@@ -62,12 +78,16 @@ import time
 import json
 import functools
 import secrets
+from urllib.parse import quote
 
 import psycopg2
 import psycopg2.extras
+import resend
 from flask import (
     Blueprint, request, jsonify, session, send_from_directory, current_app
 )
+
+from email_templates import render_onboarding_email
 
 # --------------------------------------------------------------------------
 # Config (env-driven so nothing is hardcoded / everything is easy to change)
@@ -76,6 +96,12 @@ from flask import (
 ADMIN_PASSWORD = os.environ.get("ADMIN_PASSWORD", "changeme")
 ADMIN_URL_PREFIX = os.environ.get("ADMIN_URL_PREFIX", "/admin")
 NEON_DATABASE_URL = os.environ.get("NEON_DATABASE_URL")
+
+RESEND_API_KEY = os.environ.get("RESEND_API_KEY")
+RESEND_FROM = os.environ.get("RESEND_FROM", "Shiro NC <onboarding@shironc.com>")
+R2_PUBLIC_BASE = os.environ.get("R2_PUBLIC_BASE", "")
+
+resend.api_key = RESEND_API_KEY
 
 _STATIC_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "admin_static")
 
@@ -98,6 +124,13 @@ def init_admin(app):
             "  WARNING: ADMIN_PASSWORD is not set — using default 'changeme'.\n"
             "  Set the ADMIN_PASSWORD environment variable before deploying.\n"
             "!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!\n"
+        )
+
+    if not RESEND_API_KEY:
+        print(
+            "\n"
+            "  NOTE: RESEND_API_KEY is not set — onboarding emails will fail\n"
+            "  silently (license creation still succeeds either way).\n"
         )
 
 
@@ -146,6 +179,42 @@ def set_config_value(key, value):
         """,
         (key, value),
     )
+
+
+# --------------------------------------------------------------------------
+# Onboarding email
+# --------------------------------------------------------------------------
+
+def _send_onboarding_email(to_email, license_key):
+    """Best-effort send. Returns {"ok": True} or {"ok": False, "error": "..."} —
+    never raises, so a bad email never blocks license creation."""
+    raw = get_config_value("release_info", "{}")
+    try:
+        release = json.loads(raw)
+    except Exception:
+        release = {}
+
+    object_key = release.get("object_key")
+    version = release.get("latest_version", "")
+
+    if not RESEND_API_KEY:
+        return {"ok": False, "error": "RESEND_API_KEY not configured"}
+    if not object_key or not R2_PUBLIC_BASE:
+        return {"ok": False, "error": "release info or R2_PUBLIC_BASE not configured"}
+
+    download_url = f"{R2_PUBLIC_BASE}/{quote(object_key)}"
+    html = render_onboarding_email(version, download_url, license_key)
+
+    try:
+        resend.Emails.send({
+            "from": RESEND_FROM,
+            "to": to_email,
+            "subject": "Welcome to Shiro NC — your download is ready",
+            "html": html,
+        })
+        return {"ok": True}
+    except Exception as e:
+        return {"ok": False, "error": str(e)}
 
 
 # --------------------------------------------------------------------------
@@ -281,6 +350,7 @@ def create_license():
         key = "-".join(secrets.token_hex(2).upper() for _ in range(4))
     days = int(data.get("days", 90))
     customer_name = (data.get("customer_name") or "").strip() or None
+    email = (data.get("email") or "").strip() or None
 
     existing = db_execute("SELECT key FROM licenses WHERE key = %s", (key,), fetch="one")
     if existing:
@@ -291,7 +361,12 @@ def create_license():
         "VALUES (%s, %s, NULL, NULL, %s)",
         (key, days, customer_name),
     )
-    return jsonify({"ok": True, "key": key})
+
+    email_sent = None
+    if email:
+        email_sent = _send_onboarding_email(email, key)
+
+    return jsonify({"ok": True, "key": key, "email_sent": email_sent})
 
 
 @admin_bp.route("/api/licenses/<key>", methods=["PATCH"])
