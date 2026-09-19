@@ -12,6 +12,7 @@ print("SERVER RUNNING FROM:", os.getcwd())
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 
 from flask import Flask, request, jsonify
+from werkzeug.exceptions import HTTPException
 import psycopg2
 import psycopg2.extras
 
@@ -62,9 +63,14 @@ def db_execute(query, params=None, fetch=None, retries=2):
     raise last_err
 
 
-# --- Global error handler: log full traceback for any unhandled exception ---
+# --- Global error handler: log full traceback for any UNHANDLED server error.
+# HTTPException (404, 405, etc.) is a subclass of Exception in Flask/Werkzeug,
+# so it's explicitly passed through here — otherwise routine 404s (bots
+# hitting /robots.txt, /sitemap.xml) get logged as errors and turned into 500s.
 @app.errorhandler(Exception)
 def handle_unhandled_exception(e):
+    if isinstance(e, HTTPException):
+        return e
     logger.error(
         "[UNHANDLED] %s %s -> %s\n%s",
         request.method, request.path, e, traceback.format_exc()
