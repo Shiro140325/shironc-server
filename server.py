@@ -3,6 +3,8 @@ import uuid
 import json
 import requests as _requests
 import time
+import traceback
+import logging
 from itertools import zip_longest
 from urllib.parse import quote
 
@@ -12,11 +14,11 @@ BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 from flask import Flask, request, jsonify
 import psycopg2
 import psycopg2.extras
-import psycopg2.pool
-from psycopg2 import OperationalError, InterfaceError
-from psycopg2.pool import PoolError
 
 app = Flask(__name__)
+
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger("shironc")
 
 from admin import admin_bp, init_admin
 init_admin(app)
@@ -24,69 +26,50 @@ app.register_blueprint(admin_bp)
 
 NEON_DATABASE_URL = os.environ.get("NEON_DATABASE_URL")
 
-# --- Connection pooling (paid tier still benefits from reuse) ---
-_connection_pool = None
-
-
-def get_pool():
-    global _connection_pool
-    if _connection_pool is None:
-        _connection_pool = psycopg2.pool.ThreadedConnectionPool(
-            minconn=2,
-            maxconn=20,
-            dsn=NEON_DATABASE_URL,
-            cursor_factory=psycopg2.extras.RealDictCursor,
-        )
-    return _connection_pool
-
 
 def get_conn():
-    return get_pool().getconn()
+    return psycopg2.connect(NEON_DATABASE_URL, cursor_factory=psycopg2.extras.RealDictCursor)
 
 
-def release_conn(conn):
-    get_pool().putconn(conn)
-
-
-def db_execute(query, params=None, fetch=None, retries=3):
+def db_execute(query, params=None, fetch=None, retries=2):
     """
     fetch: None (no return), "one" (fetchone), "all" (fetchall)
     """
     last_err = None
     for attempt in range(retries + 1):
-        conn = None
         try:
-            conn = get_conn()
-            conn.set_session(autocommit=True)
-            with conn.cursor() as cur:
-                cur.execute("SET statement_timeout = '5000'")
-                cur.execute(query, params or ())
-                if fetch == "one":
-                    result = cur.fetchone()
-                elif fetch == "all":
-                    result = cur.fetchall()
-                else:
-                    result = None
-            conn.commit()
-            return result
-        except (OperationalError, InterfaceError, PoolError, TimeoutError) as e:
+            with get_conn() as conn:
+                with conn.cursor() as cur:
+                    cur.execute(query, params or ())
+                    if fetch == "one":
+                        result = cur.fetchone()
+                    elif fetch == "all":
+                        result = cur.fetchall()
+                    else:
+                        result = None
+                    conn.commit()
+                    return result
+        except psycopg2.OperationalError as e:
             last_err = e
-            if conn:
-                try:
-                    conn.rollback()
-                except Exception:
-                    pass
+            logger.error(
+                "[DB_EXECUTE] OperationalError on attempt %d/%d for query %r: %s\n%s",
+                attempt + 1, retries + 1, query[:80], e, traceback.format_exc()
+            )
             if attempt == retries:
                 raise
-            # Exponential backoff: 1.5s, 2.25s, 3.375s
-            time.sleep(1.5 ** attempt)
-        finally:
-            if conn:
-                try:
-                    release_conn(conn)
-                except Exception:
-                    pass
+            time.sleep(0.2 * (attempt + 1))
+            continue
     raise last_err
+
+
+# --- Global error handler: log full traceback for any unhandled exception ---
+@app.errorhandler(Exception)
+def handle_unhandled_exception(e):
+    logger.error(
+        "[UNHANDLED] %s %s -> %s\n%s",
+        request.method, request.path, e, traceback.format_exc()
+    )
+    return jsonify({"error": "internal_error", "detail": str(e)}), 500
 
 
 MIN_VERSION = (1, 16, 1)  # fallback default if app_config has no min_version row yet
@@ -119,6 +102,7 @@ def get_poll_config():
             try:
                 _poll_config_cache["value"] = {**DEFAULT_POLL_CONFIG, **json.loads(row["value"])}
             except Exception:
+                logger.error("[POLL_CONFIG] failed to parse row value\n%s", traceback.format_exc())
                 _poll_config_cache["value"] = DEFAULT_POLL_CONFIG
         else:
             _poll_config_cache["value"] = DEFAULT_POLL_CONFIG
@@ -158,28 +142,39 @@ def get_min_version():
 
 
 # --- Cache warm-up ---------------------------------------------------------
+# Runs once at process start, inside an app context, so /health never has to
+# touch Neon itself.
 def _warm_caches():
     try:
         get_min_version()
         get_poll_config()
         print("Cache warm-up OK: min_version + poll_config loaded from DB")
     except Exception as e:
-        print("Cache warm-up failed, /health will serve hardcoded defaults until next successful DB call:", e)
+        logger.error("[WARM_CACHES] failed, /health will serve defaults: %s\n%s", e, traceback.format_exc())
 
 
 with app.app_context():
     _warm_caches()
 # ---------------------------------------------------------------------------
 
+
 LATEST_VERSION = "1.18.7"
 LATEST_OBJECT_KEY = "Shiro NC 1.18.7.zip"  # ← confirm this matches the exact filename in your R2 bucket
 
-# --- Update source config ---
 R2_PUBLIC_BASE_URL = "https://updates.shironc.com"
 
-DEFAULT_PARSE_VERSION_LIST = lambda v: [int(x) if x.isdigit() else 0 for x in v.lstrip("vV").split(".")]
+# GITHUB_OWNER = "Shiro140325"
+# GITHUB_REPO = "shironc-releases"
+# GITHUB_RELEASE_TAG = "v1.18.7"
+
+
+def _parse_version_list(v: str) -> list:
+    v = v.lstrip("vV")
+    return [int(x) if x.isdigit() else 0 for x in v.split(".")]
+
+
 def _is_newer(a: str, b: str) -> bool:
-    av, bv = DEFAULT_PARSE_VERSION_LIST(a), DEFAULT_PARSE_VERSION_LIST(b)
+    av, bv = _parse_version_list(a), _parse_version_list(b)
     for ai, bi in zip_longest(av, bv, fillvalue=0):
         if ai > bi:
             return True
@@ -219,13 +214,14 @@ def broadcast():
             row = db_execute("SELECT value FROM app_config WHERE key = %s", ("broadcast_message",), fetch="one")
             _broadcast_cache["value"] = row["value"] if row else ""
         except Exception:
-            pass
+            logger.error("[BROADCAST] DB read failed, serving stale cache\n%s", traceback.format_exc())
         _broadcast_cache["ts"] = now
     return jsonify({"message": _broadcast_cache["value"]}), 200
 
 
 @app.route("/health")
 def health():
+    # Pure liveness check — never touches the DB, directly or indirectly.
     min_v = _min_version_cache["value"] or MIN_VERSION
     cfg = _poll_config_cache["value"] or DEFAULT_POLL_CONFIG
     return jsonify({
@@ -267,6 +263,7 @@ def transcribe():
         )
         return (response.content, response.status_code, {"Content-Type": "application/json"})
     except Exception as e:
+        logger.error("[TRANSCRIBE] failed: %s\n%s", e, traceback.format_exc())
         return jsonify({"error": str(e)}), 500
 
 
@@ -352,7 +349,7 @@ def validate():
     if uid:
         lic = get_license_by_uid(uid)
         if not lic:
-            return jsonify({"error": "Invalid"}), 400
+            return jsonify({"error": "Invalid"}), 400  # superseded by a newer device registration
     else:
         lic = get_license(key)
         if not lic:
@@ -369,7 +366,7 @@ def validate():
                 (version_str, uid if uid else key)
             )
         except Exception:
-            pass  # non-critical, don't fail validation over a logging write
+            logger.error("[VALIDATE] version-log update failed (non-critical)\n%s", traceback.format_exc())
 
     days = lic["days"]
     if days != 0:
