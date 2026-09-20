@@ -142,6 +142,34 @@ def get_min_version():
     return _min_version_cache["value"]
 
 
+LATEST_VERSION = "1.18.7"
+LATEST_OBJECT_KEY = "Shiro NC 1.18.7.zip"  # fallback only, used until app_config has a release_info row
+
+# --- release_info read cache (30 min TTL) — same pattern as min_version/poll_config.
+# The admin panel's Release tab writes here (see admin.py's /api/release); this is
+# the part that was missing, so /check-update kept serving the hardcoded constants
+# above instead of whatever was actually set in the panel.
+_release_cache = {"value": None, "ts": 0}
+_RELEASE_TTL = 1800  # 30 min
+
+
+def get_release_info():
+    now = time.time()
+    if _release_cache["value"] is None or now - _release_cache["ts"] > _RELEASE_TTL:
+        row = db_execute("SELECT value FROM app_config WHERE key = %s", ("release_info",), fetch="one")
+        release = {"latest_version": LATEST_VERSION, "object_key": LATEST_OBJECT_KEY}
+        if row:
+            try:
+                parsed = json.loads(row["value"])
+                release["latest_version"] = parsed.get("latest_version") or LATEST_VERSION
+                release["object_key"] = parsed.get("object_key") or LATEST_OBJECT_KEY
+            except Exception:
+                logger.error("[RELEASE] failed to parse release_info row\n%s", traceback.format_exc())
+        _release_cache["value"] = release
+        _release_cache["ts"] = now
+    return _release_cache["value"]
+
+
 # --- Cache warm-up ---------------------------------------------------------
 # Runs once at process start, inside an app context, so /health never has to
 # touch Neon itself.
@@ -149,7 +177,8 @@ def _warm_caches():
     try:
         get_min_version()
         get_poll_config()
-        print("Cache warm-up OK: min_version + poll_config loaded from DB")
+        get_release_info()
+        print("Cache warm-up OK: min_version + poll_config + release_info loaded from DB")
     except Exception as e:
         logger.error("[WARM_CACHES] failed, /health will serve defaults: %s\n%s", e, traceback.format_exc())
 
@@ -157,10 +186,6 @@ def _warm_caches():
 with app.app_context():
     _warm_caches()
 # ---------------------------------------------------------------------------
-
-
-LATEST_VERSION = "1.18.7"
-LATEST_OBJECT_KEY = "Shiro NC 1.18.7.zip"  # ← confirm this matches the exact filename in your R2 bucket
 
 R2_PUBLIC_BASE_URL = "https://updates.shironc.com"
 
@@ -189,20 +214,24 @@ def check_update():
     data = request.json or {}
     current_version = data.get("current_version", "0.0.0")
 
-    if not _is_newer(LATEST_VERSION, current_version):
+    release = get_release_info()
+    latest_version = release["latest_version"]
+    object_key = release["object_key"]
+
+    if not _is_newer(latest_version, current_version):
         return jsonify({
             "ok": True,
             "update_available": False,
-            "latest_version": LATEST_VERSION
+            "latest_version": latest_version
         })
 
-    download_url = f"{R2_PUBLIC_BASE_URL}/{quote(LATEST_OBJECT_KEY)}"
+    download_url = f"{R2_PUBLIC_BASE_URL}/{quote(object_key)}"
 
     return jsonify({
         "ok": True,
         "update_available": True,
-        "latest_version": LATEST_VERSION,
-        "file_name": LATEST_OBJECT_KEY,
+        "latest_version": latest_version,
+        "file_name": object_key,
         "download_url": download_url
     })
 
