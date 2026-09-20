@@ -301,8 +301,12 @@ def activate():
     if not lic:
         return jsonify({"error": "Invalid license"}), 400
 
-    if lic["activated_at"] is None:
-        activated = int(time.time())
+    if lic["activated_at"] is None or lic["device_id"] is None:
+        # Bind this device whenever there isn't one on record yet — covers
+        # both the very first activation and a re-activation after a device
+        # reset. Keep the original activated_at once it's set so a reset
+        # doesn't also restart the license's expiry countdown.
+        activated = lic["activated_at"] if lic["activated_at"] is not None else int(time.time())
         update_license(key, activated, device)
         lic = get_license(key)
 
