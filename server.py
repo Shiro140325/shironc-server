@@ -1,5 +1,4 @@
 import os
-import uuid
 import json
 import requests as _requests
 import time
@@ -125,10 +124,6 @@ def _parse_version(v: str) -> tuple:
 
 def get_license(key):
     return db_execute("SELECT * FROM licenses WHERE key = %s", (key,), fetch="one")
-
-
-def get_license_by_uid(uid):
-    return db_execute("SELECT * FROM licenses WHERE unique_identifier = %s", (uid,), fetch="one")
 
 
 def update_license(key, activated_at, device_id):
@@ -280,18 +275,12 @@ def home():
 
 @app.route("/status", methods=["GET"])
 def status():
-    uid = request.args.get("unique_identifier")
     key = request.args.get("key", "").strip().upper()
     device = request.args.get("device")
 
-    if uid:
-        lic = get_license_by_uid(uid)
-        if not lic:
-            return jsonify({"active": False}), 200
-    else:
-        lic = get_license(key)
-        if not lic or lic["device_id"] != device:
-            return jsonify({"active": False}), 200
+    lic = get_license(key)
+    if not lic or lic["device_id"] != device:
+        return jsonify({"active": False}), 200
 
     days = lic["days"]
     if days != 0:
@@ -305,26 +294,20 @@ def status():
 @app.route("/activate", methods=["POST"])
 def activate():
     data = request.json
-    uid = data.get("unique_identifier")
     key = data.get("key", "").strip().upper()
     device = data.get("device")
 
-    if uid:
-        lic = get_license_by_uid(uid)
-        if not lic:
-            return jsonify({"error": "Invalid license"}), 400
-    else:
+    lic = get_license(key)
+    if not lic:
+        return jsonify({"error": "Invalid license"}), 400
+
+    if lic["activated_at"] is None:
+        activated = int(time.time())
+        update_license(key, activated, device)
         lic = get_license(key)
-        if not lic:
-            return jsonify({"error": "Invalid license"}), 400
 
-        if lic["activated_at"] is None:
-            activated = int(time.time())
-            update_license(key, activated, device)
-            lic = get_license(key)
-
-        if lic["device_id"] and lic["device_id"] != device:
-            return jsonify({"error": "Used on another device"}), 403
+    if lic["device_id"] and lic["device_id"] != device:
+        return jsonify({"error": "Used on another device"}), 403
 
     days = lic["days"]
     if days != 0:
@@ -343,7 +326,6 @@ def activate():
 @app.route("/validate", methods=["POST"])
 def validate():
     data = request.json
-    uid = data.get("unique_identifier")
     key = data.get("key", "").strip().upper()
     device = data.get("device")
     version_str = data.get("version", "0.0.0")
@@ -352,24 +334,19 @@ def validate():
     if version < get_min_version():
         return jsonify({"error": "Invalid"}), 400
 
-    if uid:
-        lic = get_license_by_uid(uid)
-        if not lic:
-            return jsonify({"error": "Invalid"}), 400  # superseded by a newer device registration
-    else:
-        lic = get_license(key)
-        if not lic:
-            return jsonify({"error": "Invalid"}), 400
-        if lic["device_id"] != device:
-            return jsonify({"error": "Invalid device"}), 403
+    lic = get_license(key)
+    if not lic:
+        return jsonify({"error": "Invalid"}), 400
+    if lic["device_id"] != device:
+        return jsonify({"error": "Invalid device"}), 403
 
     # Only write the version-log update when it actually changed —
     # avoids a DB write on every single /validate poll.
     if lic.get("app_version") != version_str:
         try:
             db_execute(
-                f"UPDATE licenses SET app_version = %s WHERE {'unique_identifier' if uid else 'key'} = %s",
-                (version_str, uid if uid else key)
+                "UPDATE licenses SET app_version = %s WHERE key = %s",
+                (version_str, key)
             )
         except Exception:
             logger.error("[VALIDATE] version-log update failed (non-critical)\n%s", traceback.format_exc())
@@ -394,28 +371,26 @@ def validate():
     })
 
 
-@app.route("/device/register", methods=["POST"])
-def device_register():
+@app.route("/migrate-device", methods=["POST"])
+def migrate_device():
+    """One-time bridge for clients still holding a UID from before the
+    MachineGuid switch. The UID proves identity (only the real holder of an
+    already-activated license would have it cached locally), so we use it to
+    re-stamp device_id to the new value the client now sends — meaning their
+    very next plain key+device request succeeds instead of getting rejected
+    as 'used on another device'. Safe to delete once existing installs have
+    all had a chance to run this at least once."""
     data = request.json
     key = data.get("key", "").strip().upper()
+    uid = data.get("unique_identifier")
     device = data.get("device")
 
     lic = get_license(key)
-    if not lic:
-        return jsonify({"error": "Invalid license"}), 400
+    if not lic or not uid or lic.get("unique_identifier") != uid:
+        return jsonify({"error": "Invalid"}), 400
 
-    # Same device re-asking (reinstall, deleted device.dat, etc.) — return existing UID
-    if lic.get("unique_identifier") and lic["device_id"] == device:
-        return jsonify({"unique_identifier": lic["unique_identifier"]}), 200
-
-    # New device — issue a fresh UID, overwrite the old one
-    uid = str(uuid.uuid4())
-    db_execute(
-        "UPDATE licenses SET unique_identifier = %s, device_id = %s, activated_at = %s WHERE key = %s",
-        (uid, device, lic["activated_at"] or int(time.time()), key)
-    )
-
-    return jsonify({"unique_identifier": uid}), 200
+    db_execute("UPDATE licenses SET device_id = %s WHERE key = %s", (device, key))
+    return jsonify({"ok": True}), 200
 
 
 @app.route("/add", methods=["POST"])
