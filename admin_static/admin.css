@@ -257,7 +257,7 @@ textarea { resize: vertical; }
 
 .stat-grid {
   display: grid;
-  grid-template-columns: repeat(4, 1fr);
+  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
   gap: 12px;
   margin-bottom: 28px;
 }
@@ -274,6 +274,7 @@ textarea { resize: vertical; }
 .stat-label { font-size: 12.5px; color: var(--text-dim); }
 .stat-accent .stat-value { color: var(--magenta-bright); }
 .stat-warn .stat-value { color: var(--amber); }
+.stat-online .stat-value { color: var(--green); }
 
 /* ---------- Panels & forms ---------- */
 
@@ -389,6 +390,8 @@ textarea { resize: vertical; }
 .badge-active { background: var(--green-wash); color: var(--green); }
 .badge-expired { background: var(--red-wash); color: var(--red); }
 .badge-unactivated { background: var(--amber-wash); color: var(--amber); }
+.badge-online { background: var(--green-wash); color: var(--green); }
+.badge-offline { background: var(--magenta-wash); color: var(--text-faint); }
 
 /* ---------- Modal ---------- */
 
