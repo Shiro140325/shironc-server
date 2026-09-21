@@ -115,9 +115,19 @@ def render_onboarding_email(version, download_url, license_key=None):
                   </td>
                 </tr>
 
-                <!-- CTA -->
+                <!-- Installer note -->
                 <tr>
                   <td align="center" style="padding-top:32px;">
+                    <p style="margin:0; font-family:Arial, sans-serif; font-size:13.5px;
+                              line-height:1.5; font-weight:700; color:#F1F1F3;">
+                      Click Yes when VB-Audio displays its prompt during installation
+                    </p>
+                  </td>
+                </tr>
+
+                <!-- CTA -->
+                <tr>
+                  <td align="center" style="padding-top:16px;">
                     <table role="presentation" cellpadding="0" cellspacing="0">
                       <tr>
                         <td align="center" style="border-radius:8px; background:#E8E8EA;">
