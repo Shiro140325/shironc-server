@@ -223,12 +223,14 @@ textarea { resize: vertical; }
 .logs-list li {
   display: flex;
   align-items: center;
-  gap: 10px;
+  flex-wrap: wrap;
+  gap: 6px 10px;
   padding: 7px 0;
   font-size: 12.5px;
   color: var(--text-dim);
   border-top: 1px solid var(--border-soft);
 }
+.logs-list li > span { flex: 1 1 140px; min-width: 0; }
 .logs-view {
   margin-top: 14px;
   max-height: 320px;
@@ -471,7 +473,30 @@ textarea { resize: vertical; }
   border: 1px solid var(--border);
   border-radius: var(--radius-lg);
   padding: 24px;
+  /* Without this the modal grows past the bottom of the screen once the logs
+     section is open, and the backdrop is fixed so nothing can scroll to it. */
+  max-height: 90vh;
+  overflow-y: auto;
 }
+
+/* With logs open, grow sideways instead of downwards: form on the left,
+   logs on the right. */
+.modal.has-logs {
+  max-width: 900px;
+  display: grid;
+  grid-template-columns: minmax(0, 360px) minmax(0, 1fr);
+  gap: 0 26px;
+  align-items: start;
+}
+.modal.has-logs > h3 { grid-column: 1 / -1; }
+.modal.has-logs .logs-block {
+  margin-top: 0;
+  padding-top: 0;
+  border-top: none;
+  padding-left: 24px;
+  border-left: 1px solid var(--border-soft);
+}
+.modal.has-logs .logs-view { max-height: 46vh; }
 .modal h3 { font-size: 16px; margin-bottom: 18px; }
 
 /* ---------- Toast ---------- */
@@ -530,6 +555,18 @@ textarea { resize: vertical; }
   .stat-grid { grid-template-columns: repeat(2, 1fr); }
   .field-grid { grid-template-columns: 1fr; }
   .inline-form { flex-direction: column; align-items: stretch; }
+  /* No room for two columns on a phone — stack them back up. */
+  .modal.has-logs {
+    display: block;
+    max-width: 400px;
+  }
+  .modal.has-logs .logs-block {
+    margin-top: 22px;
+    padding-top: 20px;
+    padding-left: 0;
+    border-left: none;
+    border-top: 1px solid var(--border-soft);
+  }
   /* width:100% lets the table shrink to the viewport, so the wrapper's
      overflow-x has nothing to scroll and nine columns get crushed instead. */
   .table { min-width: 880px; }

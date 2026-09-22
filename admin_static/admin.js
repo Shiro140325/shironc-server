@@ -299,8 +299,9 @@ function openLicenseModal(key) {
   $("#license-modal-result").textContent = "";
 
   // Logs belong to an existing license, so there's nothing to show while
-  // creating one.
+  // creating one. has-logs widens the modal into two columns.
   $("#lm-logs").hidden = isNew;
+  $(".modal", modal).classList.toggle("has-logs", !isNew);
   $("#lm-logs-view").hidden = true;
   $("#lm-logs-list").innerHTML = "";
   if (!isNew) loadLogs(key);
@@ -325,6 +326,7 @@ async function loadLogs(key) {
       ? uploads.map((u) => `
           <li>
             <button type="button" class="btn btn-icon" data-log="${u.id}">View</button>
+            <button type="button" class="btn btn-icon" data-dl="${u.id}">Download</button>
             <span>${formatDate(u.uploaded_at)} · v${escapeHtml(u.app_version || "?")} · ${(u.bytes / 1024).toFixed(1)} KB</span>
           </li>`).join("")
       : `<li class="hint">No uploads yet.</li>`;
@@ -332,9 +334,18 @@ async function loadLogs(key) {
     $$("[data-log]", list).forEach((b) => {
       b.addEventListener("click", () => viewLog(Number(b.dataset.log)));
     });
+    $$("[data-dl]", list).forEach((b) => {
+      b.addEventListener("click", () => downloadLog(Number(b.dataset.dl)));
+    });
   } catch (err) {
     hint.textContent = err.message;
   }
+}
+
+function flattenLog(row) {
+  return Object.entries(row.logs)
+    .map(([name, body]) => `===== ${name} =====\n${body}`)
+    .join("\n\n");
 }
 
 async function viewLog(id) {
@@ -342,12 +353,27 @@ async function viewLog(id) {
   view.hidden = false;
   view.textContent = "Loading…";
   try {
-    const row = await api(`api/logs/${id}`);
-    view.textContent = Object.entries(row.logs)
-      .map(([name, body]) => `===== ${name} =====\n${body}`)
-      .join("\n\n");
+    view.textContent = flattenLog(await api(`api/logs/${id}`));
   } catch (err) {
     view.textContent = err.message;
+  }
+}
+
+async function downloadLog(id) {
+  try {
+    const row = await api(`api/logs/${id}`);
+    const stamp = new Date(row.uploaded_at * 1000).toISOString().replace(/[:.]/g, "-").slice(0, 19);
+    const blob = new Blob([flattenLog(row)], { type: "text/plain;charset=utf-8" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `shironc-${row.license_key}-${stamp}.txt`;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    URL.revokeObjectURL(url);
+  } catch (err) {
+    toast(err.message, true);
   }
 }
 
