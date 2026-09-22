@@ -403,12 +403,68 @@ def validate():
         expires_at = lic["activated_at"] + duration_secs
 
     cfg = get_poll_config()
-    return jsonify({
+    resp = {
         "status": "ok",
         "expires_at": expires_at,
         "poll_interval": cfg["license_poll_interval"],
         "shadow_check_every": cfg["shadow_check_every"]
-    })
+    }
+    # Set from the admin panel. The client can't be reached directly (it sits
+    # behind NAT), so a request rides out on the poll it already makes and the
+    # client uploads on its next pass.
+    if lic.get("logs_requested_at"):
+        resp["upload_logs"] = True
+    return jsonify(resp)
+
+
+# Roughly 1 MB of gzipped text; a normal upload is a few KB, so anything near
+# this is a runaway log rather than something worth storing.
+MAX_LOG_UPLOAD_BYTES = 1_000_000
+
+
+@app.route("/upload-logs", methods=["POST"])
+def upload_logs():
+    data = request.json or {}
+    key = data.get("key", "").strip().upper()
+    device = data.get("device")
+    logs = data.get("logs")
+
+    if not isinstance(logs, dict) or not logs:
+        return jsonify({"error": "no logs"}), 400
+
+    lic = get_license(key)
+    if not lic or lic["device_id"] != device:
+        return jsonify({"error": "Invalid"}), 403
+
+    # Keep only string values and cap the total, so a broken client can't
+    # stream an unbounded body into the database.
+    cleaned, total = {}, 0
+    for name, body in logs.items():
+        if not isinstance(body, str):
+            continue
+        total += len(body.encode("utf-8", "replace"))
+        if total > MAX_LOG_UPLOAD_BYTES:
+            return jsonify({"error": "too large"}), 413
+        cleaned[str(name)[:40]] = body
+
+    if not cleaned:
+        return jsonify({"error": "no logs"}), 400
+
+    db_execute(
+        "INSERT INTO client_logs (license_key, device_id, app_version, uploaded_at, logs, bytes)"
+        " VALUES (%s, %s, %s, %s, %s, %s)",
+        (key, device, data.get("version"), int(time.time()), json.dumps(cleaned), total),
+    )
+    db_execute("UPDATE licenses SET logs_requested_at = NULL WHERE key = %s", (key,))
+
+    # Keep the five most recent uploads per license; older ones stop being
+    # useful once the customer has upgraded past whatever they described.
+    db_execute(
+        "DELETE FROM client_logs WHERE license_key = %s AND id NOT IN ("
+        "  SELECT id FROM client_logs WHERE license_key = %s ORDER BY uploaded_at DESC LIMIT 5)",
+        (key, key),
+    )
+    return jsonify({"ok": True, "bytes": total})
 
 
 @app.route("/migrate-device", methods=["POST"])

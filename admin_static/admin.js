@@ -297,8 +297,78 @@ function openLicenseModal(key) {
   $("#lm-delete").hidden = isNew;
   $("#lm-submit").textContent = isNew ? "Create" : "Save changes";
   $("#license-modal-result").textContent = "";
+
+  // Logs belong to an existing license, so there's nothing to show while
+  // creating one.
+  $("#lm-logs").hidden = isNew;
+  $("#lm-logs-view").hidden = true;
+  $("#lm-logs-list").innerHTML = "";
+  if (!isNew) loadLogs(key);
+
   modal.hidden = false;
 }
+
+let logsKey = null;
+
+async function loadLogs(key) {
+  logsKey = key;
+  const hint = $("#lm-logs-hint");
+  const list = $("#lm-logs-list");
+  try {
+    const { uploads, pending } = await api(`api/licenses/${encodeURIComponent(key)}/logs`);
+    $("#lm-request-logs").textContent = pending ? "Cancel request" : "Request logs";
+    hint.textContent = pending
+      ? "Waiting — the client uploads on its next check-in (about 20s while it's running)."
+      : "Asks the client to upload its logs the next time it checks in.";
+
+    list.innerHTML = uploads.length
+      ? uploads.map((u) => `
+          <li>
+            <button type="button" class="btn btn-icon" data-log="${u.id}">View</button>
+            <span>${formatDate(u.uploaded_at)} · v${escapeHtml(u.app_version || "?")} · ${(u.bytes / 1024).toFixed(1)} KB</span>
+          </li>`).join("")
+      : `<li class="hint">No uploads yet.</li>`;
+
+    $$("[data-log]", list).forEach((b) => {
+      b.addEventListener("click", () => viewLog(Number(b.dataset.log)));
+    });
+  } catch (err) {
+    hint.textContent = err.message;
+  }
+}
+
+async function viewLog(id) {
+  const view = $("#lm-logs-view");
+  view.hidden = false;
+  view.textContent = "Loading…";
+  try {
+    const row = await api(`api/logs/${id}`);
+    view.textContent = Object.entries(row.logs)
+      .map(([name, body]) => `===== ${name} =====\n${body}`)
+      .join("\n\n");
+  } catch (err) {
+    view.textContent = err.message;
+  }
+}
+
+$("#lm-request-logs").addEventListener("click", async () => {
+  if (!logsKey) return;
+  const cancelling = $("#lm-request-logs").textContent === "Cancel request";
+  try {
+    const path = `api/licenses/${encodeURIComponent(logsKey)}/request-logs`;
+    const res = await api(path, { method: cancelling ? "DELETE" : "POST" });
+    if (!cancelling) {
+      toast(res.online
+        ? "Requested — the client is online, so it should arrive shortly."
+        : "Requested — this client is offline, so it will upload whenever it next runs.");
+    } else {
+      toast("Request cancelled.");
+    }
+    loadLogs(logsKey);
+  } catch (err) {
+    toast(err.message, true);
+  }
+});
 
 function closeLicenseModal() {
   $("#license-modal").hidden = true;
