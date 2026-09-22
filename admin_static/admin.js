@@ -14,9 +14,13 @@ const api = async (path, opts = {}) => {
     // Sessions now expire, so a 401 mid-visit means the login lapsed rather
     // than anything being wrong with the request — bounce to the login screen
     // instead of painting "unauthorized" into whatever view asked.
-    if (res.status === 401 && !path.startsWith("api/login")) showLogin();
+    // The two auth endpoints answer 401 as a normal outcome (wrong password,
+    // wrong code), and bouncing on those would throw away the OTP step.
+    const isAuthStep = path.startsWith("api/login") || path.startsWith("api/verify-otp");
+    if (res.status === 401 && !isAuthStep) showLogin();
     const err = new Error((body && body.error) || `Request failed (${res.status})`);
     err.status = res.status;
+    err.body = body;
     throw err;
   }
   return body;
@@ -55,6 +59,23 @@ async function checkAuth() {
 function showLogin() {
   $("#login-screen").hidden = false;
   $("#app-shell").hidden = true;
+  showPasswordStep();
+}
+
+function showPasswordStep() {
+  $("#login-form").hidden = false;
+  $("#otp-form").hidden = true;
+  $("#otp-code").value = "";
+  $("#otp-trust").checked = false;
+  $("#otp-error").hidden = true;
+}
+
+function showOtpStep(sentTo) {
+  $("#login-form").hidden = true;
+  $("#otp-form").hidden = false;
+  $("#otp-target").textContent = sentTo || "your email";
+  $("#otp-error").hidden = true;
+  $("#otp-code").focus();
 }
 
 function showApp() {
@@ -69,13 +90,52 @@ $("#login-form").addEventListener("submit", async (e) => {
   const errEl = $("#login-error");
   errEl.hidden = true;
   try {
-    await api("api/login", { method: "POST", body: JSON.stringify({ password }) });
+    const res = await api("api/login", { method: "POST", body: JSON.stringify({ password }) });
     $("#password").value = "";
+    if (res && res.otp_required) {
+      showOtpStep(res.sent_to);
+      return;
+    }
     showApp();
   } catch (err) {
     errEl.textContent = err.status === 401 ? "Incorrect password." : err.message;
     errEl.hidden = false;
   }
+});
+
+$("#otp-form").addEventListener("submit", async (e) => {
+  e.preventDefault();
+  const code = $("#otp-code").value.trim();
+  const trust_device = $("#otp-trust").checked;
+  const errEl = $("#otp-error");
+  errEl.hidden = true;
+  try {
+    await api("api/verify-otp", {
+      method: "POST",
+      body: JSON.stringify({ code, trust_device }),
+    });
+    showApp();
+  } catch (err) {
+    // attempts_left is only sent for a wrong code, i.e. the one case still
+    // worth retrying. Anything else means the challenge is spent or expired,
+    // so send them back rather than leaving them typing into a dead form.
+    const retryable = err.body && typeof err.body.attempts_left === "number";
+    if (!retryable) {
+      showPasswordStep();
+      const loginErr = $("#login-error");
+      loginErr.textContent = err.message;
+      loginErr.hidden = false;
+      return;
+    }
+    errEl.textContent = `${err.message} — ${err.body.attempts_left} attempt(s) left.`;
+    errEl.hidden = false;
+    $("#otp-code").select();
+  }
+});
+
+$("#otp-cancel").addEventListener("click", () => {
+  showPasswordStep();
+  $("#password").focus();
 });
 
 $("#logout-btn").addEventListener("click", async () => {
@@ -98,6 +158,7 @@ function switchView(view) {
   if (view === "broadcast") loadBroadcast();
   if (view === "release") { loadMinVersion(); loadRelease(); }
   if (view === "poll") loadPollConfig();
+  if (view === "security") loadDevices();
 }
 
 // ---------------------------------------------------------------- dashboard
@@ -421,6 +482,73 @@ $("#poll-form").addEventListener("submit", async (e) => {
   } catch (err) {
     resultEl.textContent = err.message;
     resultEl.className = "field-note is-error";
+  }
+});
+
+// ---------------------------------------------------------------- security
+
+async function loadDevices() {
+  const tbody = $("#device-tbody");
+  tbody.innerHTML = `<tr><td colspan="5" class="table-empty">Loading…</td></tr>`;
+  try {
+    const { devices, current_trusted, otp_enabled, otp_email } = await api("api/devices");
+
+    const note = $("#trust-result");
+    if (!otp_enabled) {
+      note.textContent =
+        "ADMIN_OTP_EMAIL isn't set, so the password alone signs in anywhere — trusting a device changes nothing until you set it.";
+      note.className = "field-note is-error";
+    } else {
+      note.textContent = `Codes are sent to ${otp_email}.`;
+      note.className = "field-note";
+    }
+
+    const btn = $("#trust-device-btn");
+    btn.disabled = current_trusted;
+    btn.textContent = current_trusted ? "This device is trusted" : "Trust this device";
+
+    if (!devices.length) {
+      tbody.innerHTML = `<tr><td colspan="5" class="table-empty">No trusted devices.</td></tr>`;
+      return;
+    }
+    tbody.innerHTML = devices.map((d) => `
+      <tr>
+        <td>${escapeHtml(d.label || "Unknown device")}${d.current ? ' <span class="badge badge-online">this device</span>' : ""}</td>
+        <td>${formatDate(d.created_at)}</td>
+        <td>${d.last_used_at ? formatDate(d.last_used_at) : "—"}</td>
+        <td>${formatDate(d.expires_at)}</td>
+        <td class="actions-cell">
+          <button class="btn btn-icon" data-revoke="${d.id}">Revoke</button>
+        </td>
+      </tr>
+    `).join("");
+
+    $$("[data-revoke]", tbody).forEach((b) => {
+      b.addEventListener("click", () => revokeDevice(Number(b.dataset.revoke)));
+    });
+  } catch (err) {
+    tbody.innerHTML = `<tr><td colspan="5" class="table-empty">${escapeHtml(err.message)}</td></tr>`;
+  }
+}
+
+async function revokeDevice(id) {
+  if (!confirm("Revoke this device? It will need an emailed code next time it signs in.")) return;
+  try {
+    await api(`api/devices/${id}`, { method: "DELETE" });
+    toast("Device revoked.");
+    loadDevices();
+  } catch (err) {
+    toast(err.message, true);
+  }
+}
+
+$("#trust-device-btn").addEventListener("click", async () => {
+  try {
+    await api("api/devices/trust", { method: "POST" });
+    toast("This device is now trusted.");
+    loadDevices();
+  } catch (err) {
+    toast(err.message, true);
   }
 });
 

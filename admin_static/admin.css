@@ -185,6 +185,33 @@ textarea { resize: vertical; }
   margin-bottom: 6px;
 }
 .login-card input { margin-bottom: 16px; }
+.otp-intro {
+  font-size: 13px;
+  color: var(--text-dim);
+  line-height: 1.55;
+  margin-bottom: 20px;
+}
+.otp-intro span { color: var(--text); font-weight: 600; }
+.otp-input {
+  font-family: var(--font-mono);
+  font-size: 22px;
+  letter-spacing: 0.32em;
+  text-align: center;
+}
+.checkbox-row {
+  display: flex !important;
+  align-items: center;
+  gap: 9px;
+  margin-bottom: 16px;
+  cursor: pointer;
+}
+.checkbox-row input {
+  width: auto;
+  margin: 0;
+  accent-color: var(--green);
+  cursor: pointer;
+}
+.login-card .btn-block + .btn-block { margin-top: 8px; }
 .field-error {
   color: var(--red);
   font-size: 12.5px;

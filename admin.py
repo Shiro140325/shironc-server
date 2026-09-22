@@ -78,6 +78,7 @@ import time
 import json
 import functools
 import secrets
+import hashlib
 from datetime import timedelta
 from urllib.parse import quote
 
@@ -88,7 +89,7 @@ from flask import (
     Blueprint, request, jsonify, session, send_from_directory, current_app
 )
 
-from email_templates import render_onboarding_email
+from email_templates import render_onboarding_email, render_otp_email
 
 # --------------------------------------------------------------------------
 # Config (env-driven so nothing is hardcoded / everything is easy to change)
@@ -108,7 +109,17 @@ _STATIC_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "admin_st
 
 # How long an admin login lasts before it has to be re-entered. This is an
 # absolute cap measured from sign-in, not an idle timeout.
-ADMIN_SESSION_HOURS = int(os.environ.get("ADMIN_SESSION_HOURS", "12"))
+ADMIN_SESSION_HOURS = int(os.environ.get("ADMIN_SESSION_HOURS", "1"))
+
+# Where sign-in codes go. If this is unset the OTP step is skipped entirely —
+# deliberately failing open, because a missing address or a Resend outage would
+# otherwise lock the only admin out of their own panel with no way back in.
+ADMIN_OTP_EMAIL = os.environ.get("ADMIN_OTP_EMAIL", "").strip()
+
+OTP_TTL_MINUTES = int(os.environ.get("ADMIN_OTP_TTL_MINUTES", "10"))
+OTP_MAX_ATTEMPTS = 5
+TRUSTED_DEVICE_DAYS = int(os.environ.get("ADMIN_TRUSTED_DEVICE_DAYS", "30"))
+DEVICE_COOKIE = "shironc_admin_device"
 
 admin_bp = Blueprint(
     "admin",
@@ -144,6 +155,13 @@ def init_admin(app):
             "  WARNING: ADMIN_PASSWORD is not set — using default 'changeme'.\n"
             "  Set the ADMIN_PASSWORD environment variable before deploying.\n"
             "!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!\n"
+        )
+
+    if not ADMIN_OTP_EMAIL:
+        print(
+            "\n"
+            "  NOTE: ADMIN_OTP_EMAIL is not set — the control panel will accept\n"
+            "  the password alone, with no emailed code, on any device.\n"
         )
 
     if not RESEND_API_KEY:
@@ -256,28 +274,230 @@ def login_required(f):
     return wrapper
 
 
+def _hash(value):
+    return hashlib.sha256(value.encode("utf-8")).hexdigest()
+
+
+def _client_ip():
+    fwd = request.headers.get("X-Forwarded-For", "")
+    return fwd.split(",")[0].strip() if fwd else (request.remote_addr or "unknown")
+
+
+def _device_label():
+    """A rough, human-recognisable name so revoking the right row is possible.
+    Not a fingerprint and not trusted for anything — it is only ever shown."""
+    ua = request.headers.get("User-Agent", "")
+    browser = next((b for b in ("Edg", "OPR", "Chrome", "Firefox", "Safari") if b in ua), None)
+    browser = {"Edg": "Edge", "OPR": "Opera"}.get(browser, browser) or "Unknown browser"
+    os_name = next(
+        (o for o in ("Windows", "Android", "iPhone", "iPad", "Mac", "Linux") if o in ua),
+        "Unknown OS",
+    )
+    return f"{browser} on {os_name}"
+
+
+def _current_device_row():
+    """The non-expired trusted-device row matching this browser's cookie, if any."""
+    token = request.cookies.get(DEVICE_COOKIE)
+    if not token:
+        return None
+    return db_execute(
+        "SELECT * FROM admin_trusted_devices WHERE token_hash = %s AND expires_at > %s",
+        (_hash(token), int(time.time())),
+        fetch="one",
+    )
+
+
+def _remember_device(response):
+    """Issue a trusted-device token to this browser and record its hash."""
+    token = secrets.token_urlsafe(32)
+    now = int(time.time())
+    expires = now + TRUSTED_DEVICE_DAYS * 86400
+    db_execute(
+        "INSERT INTO admin_trusted_devices (token_hash, label, created_at, last_used_at, expires_at)"
+        " VALUES (%s, %s, %s, %s, %s)",
+        (_hash(token), _device_label(), now, now, expires),
+    )
+    response.set_cookie(
+        DEVICE_COOKIE,
+        token,
+        max_age=TRUSTED_DEVICE_DAYS * 86400,
+        httponly=True,
+        secure=os.environ.get("ADMIN_COOKIE_INSECURE") != "1",
+        samesite="Lax",
+    )
+    return response
+
+
+def _send_otp_email(code):
+    if not RESEND_API_KEY:
+        return {"ok": False, "error": "RESEND_API_KEY not configured"}
+    try:
+        resend.Emails.send({
+            "from": RESEND_FROM,
+            "to": ADMIN_OTP_EMAIL,
+            "subject": f"{code} is your Shiro NC control panel code",
+            "html": render_otp_email(code, OTP_TTL_MINUTES, _client_ip()),
+        })
+        return {"ok": True}
+    except Exception as e:
+        return {"ok": False, "error": str(e)}
+
+
+def _mask_email(addr):
+    name, _, domain = addr.partition("@")
+    shown = name[:2] if len(name) > 2 else name[:1]
+    return f"{shown}{'*' * max(3, len(name) - len(shown))}@{domain}"
+
+
+def _start_otp_challenge():
+    """Create a challenge, email the code, and pin it to this browser's session."""
+    code = f"{secrets.randbelow(1000000):06d}"
+    now = int(time.time())
+    db_execute("DELETE FROM admin_otp_challenges WHERE expires_at < %s", (now - 86400,))
+    row = db_execute(
+        "INSERT INTO admin_otp_challenges (code_hash, created_at, expires_at)"
+        " VALUES (%s, %s, %s) RETURNING id",
+        (_hash(code), now, now + OTP_TTL_MINUTES * 60),
+        fetch="one",
+    )
+    sent = _send_otp_email(code)
+    if not sent["ok"]:
+        db_execute("DELETE FROM admin_otp_challenges WHERE id = %s", (row["id"],))
+        return None, sent["error"]
+
+    session.clear()
+    session["otp_challenge"] = row["id"]
+    return row["id"], None
+
+
 @admin_bp.route("/api/login", methods=["POST"])
 def login():
     data = request.json or {}
     password = data.get("password", "")
     # constant-time compare
-    if secrets.compare_digest(password, ADMIN_PASSWORD):
+    if not secrets.compare_digest(password, ADMIN_PASSWORD):
+        time.sleep(0.5)  # slow down brute force a little
+        return jsonify({"error": "invalid password"}), 401
+
+    device = _current_device_row()
+    if device:
+        db_execute(
+            "UPDATE admin_trusted_devices SET last_used_at = %s WHERE id = %s",
+            (int(time.time()), device["id"]),
+        )
+        session.clear()
         session["admin_authed"] = True
         session.permanent = True
-        return jsonify({"ok": True})
-    time.sleep(0.5)  # slow down brute force a little
-    return jsonify({"error": "invalid password"}), 401
+        return jsonify({"ok": True, "trusted_device": True})
+
+    if not ADMIN_OTP_EMAIL:
+        session.clear()
+        session["admin_authed"] = True
+        session.permanent = True
+        return jsonify({"ok": True, "otp_skipped": True})
+
+    _, err = _start_otp_challenge()
+    if err:
+        current_app.logger.error("[ADMIN] OTP send failed: %s", err)
+        return jsonify({"error": f"could not send the sign-in code: {err}"}), 500
+
+    return jsonify({"otp_required": True, "sent_to": _mask_email(ADMIN_OTP_EMAIL)})
+
+
+@admin_bp.route("/api/verify-otp", methods=["POST"])
+def verify_otp():
+    data = request.json or {}
+    code = str(data.get("code", "")).strip()
+    trust = bool(data.get("trust_device"))
+
+    challenge_id = session.get("otp_challenge")
+    if not challenge_id:
+        return jsonify({"error": "no sign-in in progress"}), 401
+
+    row = db_execute(
+        "SELECT * FROM admin_otp_challenges WHERE id = %s", (challenge_id,), fetch="one"
+    )
+    now = int(time.time())
+    if not row or row["consumed"] or row["expires_at"] < now:
+        session.pop("otp_challenge", None)
+        return jsonify({"error": "that code has expired — sign in again"}), 401
+    if row["attempts"] >= OTP_MAX_ATTEMPTS:
+        db_execute("UPDATE admin_otp_challenges SET consumed = TRUE WHERE id = %s", (challenge_id,))
+        session.pop("otp_challenge", None)
+        return jsonify({"error": "too many attempts — sign in again"}), 401
+
+    db_execute(
+        "UPDATE admin_otp_challenges SET attempts = attempts + 1 WHERE id = %s", (challenge_id,)
+    )
+    if not secrets.compare_digest(_hash(code), row["code_hash"]):
+        left = OTP_MAX_ATTEMPTS - (row["attempts"] + 1)
+        time.sleep(0.5)
+        return jsonify({"error": "incorrect code", "attempts_left": max(0, left)}), 401
+
+    db_execute("UPDATE admin_otp_challenges SET consumed = TRUE WHERE id = %s", (challenge_id,))
+    session.clear()
+    session["admin_authed"] = True
+    session.permanent = True
+
+    response = jsonify({"ok": True, "device_trusted": trust})
+    return _remember_device(response) if trust else response
 
 
 @admin_bp.route("/api/logout", methods=["POST"])
 def logout():
-    session.pop("admin_authed", None)
+    session.clear()
     return jsonify({"ok": True})
 
 
 @admin_bp.route("/api/me", methods=["GET"])
 def me():
     return jsonify({"authed": bool(session.get("admin_authed"))})
+
+
+# ---- Trusted devices ---------------------------------------------------
+
+@admin_bp.route("/api/devices", methods=["GET"])
+@login_required
+def list_devices():
+    db_execute("DELETE FROM admin_trusted_devices WHERE expires_at <= %s", (int(time.time()),))
+    current = _current_device_row()
+    current_id = current["id"] if current else None
+    rows = db_execute(
+        "SELECT id, label, created_at, last_used_at, expires_at FROM admin_trusted_devices"
+        " ORDER BY last_used_at DESC NULLS LAST",
+        fetch="all",
+    )
+    out = []
+    for r in rows or []:
+        r = dict(r)
+        r["current"] = r["id"] == current_id
+        out.append(r)
+    return jsonify({
+        "devices": out,
+        "current_trusted": current_id is not None,
+        "otp_enabled": bool(ADMIN_OTP_EMAIL),
+        "otp_email": _mask_email(ADMIN_OTP_EMAIL) if ADMIN_OTP_EMAIL else None,
+    })
+
+
+@admin_bp.route("/api/devices/trust", methods=["POST"])
+@login_required
+def trust_this_device():
+    if _current_device_row():
+        return jsonify({"ok": True, "already": True})
+    return _remember_device(jsonify({"ok": True}))
+
+
+@admin_bp.route("/api/devices/<int:device_id>", methods=["DELETE"])
+@login_required
+def revoke_device(device_id):
+    current = _current_device_row()
+    db_execute("DELETE FROM admin_trusted_devices WHERE id = %s", (device_id,))
+    response = jsonify({"ok": True})
+    if current and current["id"] == device_id:
+        response.delete_cookie(DEVICE_COOKIE)
+    return response
 
 
 # --------------------------------------------------------------------------
