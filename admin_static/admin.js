@@ -11,6 +11,10 @@ const api = async (path, opts = {}) => {
   let body = null;
   try { body = await res.json(); } catch (_) {}
   if (!res.ok) {
+    // Sessions now expire, so a 401 mid-visit means the login lapsed rather
+    // than anything being wrong with the request — bounce to the login screen
+    // instead of painting "unauthorized" into whatever view asked.
+    if (res.status === 401 && !path.startsWith("api/login")) showLogin();
     const err = new Error((body && body.error) || `Request failed (${res.status})`);
     err.status = res.status;
     throw err;

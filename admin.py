@@ -78,6 +78,7 @@ import time
 import json
 import functools
 import secrets
+from datetime import timedelta
 from urllib.parse import quote
 
 import psycopg2
@@ -105,6 +106,10 @@ resend.api_key = RESEND_API_KEY
 
 _STATIC_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "admin_static")
 
+# How long an admin login lasts before it has to be re-entered. This is an
+# absolute cap measured from sign-in, not an idle timeout.
+ADMIN_SESSION_HOURS = int(os.environ.get("ADMIN_SESSION_HOURS", "12"))
+
 admin_bp = Blueprint(
     "admin",
     __name__,
@@ -116,6 +121,21 @@ def init_admin(app):
     """Call once from server.py: init_admin(app)"""
     if not app.secret_key:
         app.secret_key = os.environ.get("SECRET_KEY") or secrets.token_hex(32)
+
+    # Flask defaults a permanent session to 31 days AND refreshes the cookie on
+    # every request, so any visit inside the window silently extends it another
+    # 31 days — in practice a login never expires. Pin an absolute lifetime and
+    # stop the rolling refresh so the clock runs from sign-in.
+    app.config.update(
+        PERMANENT_SESSION_LIFETIME=timedelta(hours=ADMIN_SESSION_HOURS),
+        SESSION_REFRESH_EACH_REQUEST=False,
+        SESSION_COOKIE_HTTPONLY=True,
+        SESSION_COOKIE_SAMESITE="Lax",
+        # Render terminates TLS, so the cookie should be HTTPS-only there. Local
+        # dev over plain http:// needs ADMIN_COOKIE_INSECURE=1 or login silently
+        # fails — the browser accepts the cookie but never sends it back.
+        SESSION_COOKIE_SECURE=os.environ.get("ADMIN_COOKIE_INSECURE") != "1",
+    )
 
     if ADMIN_PASSWORD == "changeme":
         print(
