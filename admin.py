@@ -596,6 +596,58 @@ def list_licenses():
     return jsonify({"licenses": out})
 
 
+# ---- Client logs -------------------------------------------------------
+
+@admin_bp.route("/api/licenses/<key>/request-logs", methods=["POST"])
+@login_required
+def request_logs(key):
+    key = key.strip().upper()
+    lic = db_execute("SELECT key, last_seen FROM licenses WHERE key = %s", (key,), fetch="one")
+    if not lic:
+        return jsonify({"error": "not found"}), 404
+
+    db_execute("UPDATE licenses SET logs_requested_at = %s WHERE key = %s", (int(time.time()), key))
+    # The client only sees this on its next /validate, so tell the operator
+    # whether that is likely to be soon or never.
+    online = (lic.get("last_seen") or 0) >= int(time.time()) - ONLINE_WINDOW_SECS
+    return jsonify({"ok": True, "online": online})
+
+
+@admin_bp.route("/api/licenses/<key>/request-logs", methods=["DELETE"])
+@login_required
+def cancel_log_request(key):
+    db_execute("UPDATE licenses SET logs_requested_at = NULL WHERE key = %s", (key.strip().upper(),))
+    return jsonify({"ok": True})
+
+
+@admin_bp.route("/api/licenses/<key>/logs", methods=["GET"])
+@login_required
+def list_logs(key):
+    key = key.strip().upper()
+    rows = db_execute(
+        "SELECT id, device_id, app_version, uploaded_at, bytes FROM client_logs"
+        " WHERE license_key = %s ORDER BY uploaded_at DESC",
+        (key,), fetch="all",
+    )
+    lic = db_execute("SELECT logs_requested_at FROM licenses WHERE key = %s", (key,), fetch="one")
+    return jsonify({
+        "uploads": [dict(r) for r in rows or []],
+        "pending": bool(lic and lic.get("logs_requested_at")),
+    })
+
+
+@admin_bp.route("/api/logs/<int:log_id>", methods=["GET"])
+@login_required
+def get_log(log_id):
+    row = db_execute("SELECT * FROM client_logs WHERE id = %s", (log_id,), fetch="one")
+    if not row:
+        return jsonify({"error": "not found"}), 404
+    row = dict(row)
+    if isinstance(row.get("logs"), str):
+        row["logs"] = json.loads(row["logs"])
+    return jsonify(row)
+
+
 @admin_bp.route("/api/licenses", methods=["POST"])
 @login_required
 def create_license():

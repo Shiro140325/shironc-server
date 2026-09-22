@@ -212,6 +212,37 @@ textarea { resize: vertical; }
   cursor: pointer;
 }
 .login-card .btn-block + .btn-block { margin-top: 8px; }
+
+.logs-block {
+  margin-top: 22px;
+  padding-top: 20px;
+  border-top: 1px solid var(--border-soft);
+}
+.logs-block h4 { font-size: 14px; margin-bottom: 6px; }
+.logs-list { list-style: none; margin: 14px 0 0; padding: 0; }
+.logs-list li {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 7px 0;
+  font-size: 12.5px;
+  color: var(--text-dim);
+  border-top: 1px solid var(--border-soft);
+}
+.logs-view {
+  margin-top: 14px;
+  max-height: 320px;
+  overflow: auto;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  padding: 12px;
+  font-family: var(--font-mono);
+  font-size: 11.5px;
+  line-height: 1.5;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
 .field-error {
   color: var(--red);
   font-size: 12.5px;
