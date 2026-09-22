@@ -166,3 +166,126 @@ def render_onboarding_email(version, download_url, license_key=None):
 </body>
 </html>
 """
+
+
+def render_otp_email(code, minutes, ip=None):
+    origin = f"""
+                <tr>
+                  <td style="padding-top:20px;">
+                    <p style="margin:0; font-family:Arial, sans-serif; font-size:12.5px;
+                              line-height:1.6; color:#8A8A90;">
+                      Requested from {ip}
+                    </p>
+                  </td>
+                </tr>
+    """ if ip else ""
+
+    return f"""
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Shiro NC admin sign-in code</title>
+</head>
+<body style="margin:0; padding:0; background:#0B0B0C;">
+  <table role="presentation" width="100%" cellpadding="0" cellspacing="0">
+    <tr>
+      <td align="center" style="padding: 48px 16px;">
+
+        <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="max-width:520px;">
+
+          <!-- Brand mark -->
+          <tr>
+            <td align="center" style="padding-bottom:24px;">
+              <table role="presentation" cellpadding="0" cellspacing="0">
+                <tr>
+                  <td style="padding-right:10px;">
+                    <svg width="40" height="20" viewBox="0 0 48 24" xmlns="http://www.w3.org/2000/svg">
+                      <rect x="0"  y="9"  width="3" height="6"  fill="#FFFFFF"></rect>
+                      <rect x="6"  y="4"  width="3" height="16" fill="#E8E8EA"></rect>
+                      <rect x="12" y="0"  width="3" height="24" fill="#FFFFFF"></rect>
+                      <rect x="18" y="6"  width="3" height="12" fill="#E8E8EA"></rect>
+                      <rect x="24" y="10" width="3" height="4"  fill="#FFFFFF"></rect>
+                      <rect x="30" y="2"  width="3" height="20" fill="#E8E8EA"></rect>
+                      <rect x="36" y="7"  width="3" height="10" fill="#FFFFFF"></rect>
+                      <rect x="42" y="10" width="3" height="4"  fill="#E8E8EA"></rect>
+                    </svg>
+                  </td>
+                  <td>
+                    <span style="font-family:Arial, sans-serif; font-size:15px; font-weight:700;
+                                 color:#FFFFFF; letter-spacing:0.01em;">SHIRO NC</span>
+                  </td>
+                </tr>
+              </table>
+            </td>
+          </tr>
+
+          <!-- Card -->
+          <tr>
+            <td style="background:#2A2A2D; border:1px solid #404044; border-radius:16px;
+                       padding:40px 36px; box-shadow: 0 20px 60px rgba(0,0,0,0.35);">
+              <table role="presentation" width="100%" cellpadding="0" cellspacing="0">
+
+                <tr>
+                  <td>
+                    <p style="margin:0 0 6px; font-family:Arial, sans-serif; font-size:12px;
+                              letter-spacing:0.08em; text-transform:uppercase; color:#8A8A90;">
+                      Control panel
+                    </p>
+                    <h1 style="margin:0 0 16px; font-family:Arial, sans-serif; font-size:26px;
+                               font-weight:700; color:#F1F1F3; letter-spacing:-0.01em;">
+                      Your sign-in code
+                    </h1>
+                    <p style="margin:0; font-family:Arial, sans-serif; font-size:14.5px;
+                              line-height:1.65; color:#ACACB2;">
+                      Someone signed in to the Shiro NC control panel from a device that
+                      isn't trusted. Enter this code to finish signing in. It expires in
+                      {minutes} minutes.
+                    </p>
+                  </td>
+                </tr>
+
+                <tr>
+                  <td style="padding-top:28px;">
+                    <table role="presentation" width="100%" cellpadding="0" cellspacing="0">
+                      <tr>
+                        <td align="center"
+                            style="background:#3D3D40; border:1px solid #4A4A4E; border-radius:8px;
+                                   padding:18px 20px;">
+                          <p style="margin:0 0 4px; font-size:11px; letter-spacing:0.08em;
+                                    text-transform:uppercase; color:#8A8A90; font-family:Arial, sans-serif;">
+                            Verification code
+                          </p>
+                          <p style="margin:0; font-family:'SF Mono','Cascadia Code','Roboto Mono',Consolas,monospace;
+                                    font-size:30px; letter-spacing:0.22em; color:#FFFFFF; font-weight:700;">
+                            {code}
+                          </p>
+                        </td>
+                      </tr>
+                    </table>
+                  </td>
+                </tr>
+{origin}
+                <tr>
+                  <td style="padding-top:24px; border-top:1px solid #404044;">
+                    <p style="margin:24px 0 0; font-family:Arial, sans-serif; font-size:13px;
+                              line-height:1.6; color:#ACACB2;">
+                      If this wasn't you, someone has your admin password. Change it now —
+                      the code alone won't let them in, but the password will on any device
+                      you've already trusted.
+                    </p>
+                  </td>
+                </tr>
+
+              </table>
+            </td>
+          </tr>
+
+        </table>
+      </td>
+    </tr>
+  </table>
+</body>
+</html>
+"""
