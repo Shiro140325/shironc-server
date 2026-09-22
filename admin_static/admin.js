@@ -151,21 +151,21 @@ let licensesCache = [];
 
 async function loadLicenses() {
   const tbody = $("#license-tbody");
-  tbody.innerHTML = `<tr><td colspan="8" class="table-empty">Loading…</td></tr>`;
+  tbody.innerHTML = `<tr><td colspan="9" class="table-empty">Loading…</td></tr>`;
   try {
     const q = $("#license-search").value.trim();
     const { licenses } = await api(`api/licenses${q ? `?q=${encodeURIComponent(q)}` : ""}`);
     licensesCache = licenses;
     renderLicenses(licenses);
   } catch (err) {
-    tbody.innerHTML = `<tr><td colspan="8" class="table-empty">${escapeHtml(err.message)}</td></tr>`;
+    tbody.innerHTML = `<tr><td colspan="9" class="table-empty">${escapeHtml(err.message)}</td></tr>`;
   }
 }
 
 function renderLicenses(licenses) {
   const tbody = $("#license-tbody");
   if (!licenses.length) {
-    tbody.innerHTML = `<tr><td colspan="8" class="table-empty">No licenses found.</td></tr>`;
+    tbody.innerHTML = `<tr><td colspan="9" class="table-empty">No licenses found.</td></tr>`;
     return;
   }
   tbody.innerHTML = licenses.map((lic) => `
@@ -173,6 +173,7 @@ function renderLicenses(licenses) {
       <td>${lic.customer_name ? escapeHtml(lic.customer_name) : "—"}</td>
       <td class="key-cell">${escapeHtml(lic.key)}</td>
       <td><span class="badge badge-${lic.status}">${lic.status}</span></td>
+      <td><span class="badge badge-${lic.online ? "online" : "offline"}" title="Last seen: ${lic.last_seen ? formatDate(lic.last_seen) : "never"}">${lic.online ? "online" : "offline"}</span></td>
       <td>${formatDays(lic.days)}</td>
       <td>${lic.activated_at ? formatDate(lic.activated_at) : "—"}</td>
       <td>${lic.device_id ? escapeHtml(truncate(lic.device_id, 14)) : "—"}</td>

@@ -134,6 +134,12 @@ def init_admin(app):
         )
 
 
+# A license counts as online if /validate refreshed last_seen this recently.
+# Must stay above server.py's LAST_SEEN_REFRESH_SECS plus one poll interval,
+# otherwise a client that is genuinely running will flicker offline.
+ONLINE_WINDOW_SECS = 300
+
+
 # --------------------------------------------------------------------------
 # DB helpers (self-contained, mirrors server.py's pattern)
 # --------------------------------------------------------------------------
@@ -299,12 +305,19 @@ def stats():
         else:
             active += 1
 
+    online = db_execute(
+        "SELECT COUNT(*) AS c FROM licenses WHERE last_seen >= %s",
+        (now - ONLINE_WINDOW_SECS,),
+        fetch="one",
+    )["c"]
+
     return jsonify({
         "total_licenses": total,
         "activated_licenses": activated,
         "unactivated_licenses": total - activated,
         "active_licenses": active,
         "expired_licenses": expired,
+        "online_licenses": online,
     })
 
 
@@ -333,10 +346,12 @@ def list_licenses():
     else:
         rows = db_execute("SELECT * FROM licenses ORDER BY key", fetch="all")
 
+    cutoff = int(time.time()) - ONLINE_WINDOW_SECS
     out = []
     for r in rows:
         r = dict(r)
         r["status"] = _license_status(r)
+        r["online"] = (r.get("last_seen") or 0) >= cutoff
         out.append(r)
     return jsonify({"licenses": out})
 

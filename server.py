@@ -91,6 +91,10 @@ _BROADCAST_TTL = 600  # 10 min
 _poll_config_cache = {"value": None, "ts": 0}
 _POLL_CONFIG_TTL = 1800  # 30 min
 
+# How stale last_seen must get before /validate refreshes it. Must stay well
+# below admin.py's ONLINE_WINDOW_SECS, or a running client can look offline.
+LAST_SEEN_REFRESH_SECS = 120
+
 DEFAULT_POLL_CONFIG = {
     "license_poll_interval": 20,   # seconds between client /validate calls
     "monitor_interval": 30,        # seconds between client /health + /broadcast calls
@@ -373,16 +377,19 @@ def validate():
     if lic["device_id"] != device:
         return jsonify({"error": "Invalid device"}), 403
 
-    # Only write the version-log update when it actually changed —
-    # avoids a DB write on every single /validate poll.
-    if lic.get("app_version") != version_str:
+    # Only write when the version changed or last_seen has gone stale — clients
+    # poll every ~20s, so writing on every poll would double the DB round-trips
+    # per client (db_execute opens a fresh connection per query).
+    now_ts = int(time.time())
+    last_seen = lic.get("last_seen") or 0
+    if lic.get("app_version") != version_str or now_ts - last_seen >= LAST_SEEN_REFRESH_SECS:
         try:
             db_execute(
-                "UPDATE licenses SET app_version = %s WHERE key = %s",
-                (version_str, key)
+                "UPDATE licenses SET app_version = %s, last_seen = %s WHERE key = %s",
+                (version_str, now_ts, key)
             )
         except Exception:
-            logger.error("[VALIDATE] version-log update failed (non-critical)\n%s", traceback.format_exc())
+            logger.error("[VALIDATE] version/last_seen update failed (non-critical)\n%s", traceback.format_exc())
 
     days = lic["days"]
     if days != 0:
