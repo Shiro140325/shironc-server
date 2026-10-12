@@ -95,6 +95,11 @@ _POLL_CONFIG_TTL = 1800  # 30 min
 # below admin.py's ONLINE_WINDOW_SECS, or a running client can look offline.
 LAST_SEEN_REFRESH_SECS = 120
 
+# Moving a license to a new device signs the old one out. At most this many
+# moves per license in any rolling window, so one key can't be shared around.
+MAX_DEVICE_SWITCHES = 2
+DEVICE_SWITCH_WINDOW_SECS = 86400
+
 DEFAULT_POLL_CONFIG = {
     "license_poll_interval": 20,   # seconds between client /validate calls
     "monitor_interval": 30,        # seconds between client /health + /broadcast calls
@@ -343,14 +348,43 @@ def activate():
         update_license(key, activated, device)
         lic = get_license(key)
 
-    if lic["device_id"] and lic["device_id"] != device:
-        return jsonify({"error": "Used on another device"}), 403
-
     days = lic["days"]
     if days != 0:
         duration_secs = abs(days) * 60 if days < 0 else days * 86400
         if time.time() > lic["activated_at"] + duration_secs:
             return jsonify({"error": "Expired"}), 403
+
+    if lic["device_id"] and lic["device_id"] != device:
+        # Activating on a new device moves the license there, which signs the
+        # old one out on its next /validate. Capped so a key can't be shared by
+        # handing it back and forth.
+        now_ts = int(time.time())
+        recent = db_execute(
+            "SELECT switched_at FROM device_switches WHERE license_key = %s AND switched_at > %s"
+            " ORDER BY switched_at",
+            (key, now_ts - DEVICE_SWITCH_WINDOW_SECS), fetch="all",
+        ) or []
+        if len(recent) >= MAX_DEVICE_SWITCHES:
+            retry_after = recent[0]["switched_at"] + DEVICE_SWITCH_WINDOW_SECS - now_ts
+            hours = max(1, -(-retry_after // 3600))
+            return jsonify({
+                "error": f"Device switch limit reached. Try again in {hours} hour{'s' if hours != 1 else ''}.",
+                "retry_after": retry_after,
+            }), 403
+
+        # unique_identifier is cleared too, or the old device could use
+        # /migrate-device to take the license straight back past the limit.
+        db_execute(
+            "UPDATE licenses SET device_id = %s, unique_identifier = NULL WHERE key = %s",
+            (device, key),
+        )
+        db_execute(
+            "INSERT INTO device_switches (license_key, from_device, to_device, switched_at)"
+            " VALUES (%s, %s, %s, %s)",
+            (key, lic["device_id"], device, now_ts),
+        )
+        logger.info("[ACTIVATE] %s moved to a new device (%d/%d in 24h)",
+                    key, len(recent) + 1, MAX_DEVICE_SWITCHES)
 
     expires_at = None
     if days != 0:
@@ -375,7 +409,16 @@ def validate():
     if not lic:
         return jsonify({"error": "Invalid"}), 400
     if lic["device_id"] != device:
-        return jsonify({"error": "Invalid device"}), 403
+        resp = {"error": "Invalid device"}
+        # Lets the client say why it was signed out instead of looking broken.
+        # Only runs on the rejection path, so normal polls cost nothing extra.
+        moved = db_execute(
+            "SELECT 1 FROM device_switches WHERE license_key = %s AND from_device = %s LIMIT 1",
+            (key, device), fetch="one",
+        )
+        if moved:
+            resp["reason"] = "signed_in_elsewhere"
+        return jsonify(resp), 403
 
     # Only write when the version changed or last_seen has gone stale — clients
     # poll every ~20s, so writing on every poll would double the DB round-trips
