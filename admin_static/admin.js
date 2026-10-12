@@ -241,7 +241,7 @@ function renderLicenses(licenses) {
       <td><span class="badge badge-${lic.online ? "online" : "offline"}" title="Last seen: ${lic.last_seen ? formatDate(lic.last_seen) : "never"}">${lic.online ? "online" : "offline"}</span></td>
       <td>${formatDays(lic.days)}</td>
       <td>${lic.activated_at ? formatDate(lic.activated_at) : "—"}</td>
-      <td>${lic.device_id ? escapeHtml(truncate(lic.device_id, 14)) : "—"}</td>
+      <td title="${lic.switches_24h ? `Switched device ${lic.switches_24h}× in the last 24h` : ""}">${lic.device_id ? escapeHtml(truncate(lic.device_id, 14)) : "—"}${lic.switches_24h ? ` <span class="badge badge-offline">${lic.switches_24h}/2 switches</span>` : ""}</td>
       <td>${lic.app_version ? escapeHtml(lic.app_version) : "—"}</td>
       <td class="actions-cell">
         <button class="btn btn-icon" data-edit="${escapeHtml(lic.key)}">Edit</button>

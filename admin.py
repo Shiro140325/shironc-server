@@ -65,6 +65,25 @@ or `psql`) before the "Customer" field in the panel will work:
 Everything else (list/create/update) already reads and writes this column.
 
 --------------------------------------------------------------------------
+ONE-TIME DB MIGRATION (device switching)
+--------------------------------------------------------------------------
+Activating a license on a new device moves it there and signs the old one
+out, at most twice per 24 hours. Each move is recorded here:
+
+    CREATE TABLE IF NOT EXISTS device_switches (
+        id SERIAL PRIMARY KEY,
+        license_key TEXT NOT NULL,
+        from_device TEXT,
+        to_device TEXT,
+        switched_at BIGINT NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS device_switches_key_time
+        ON device_switches (license_key, switched_at);
+
+"Reset device" in the panel also clears a license's switch history, which
+lifts the limit for a customer who's stuck.
+
+--------------------------------------------------------------------------
 ADDING NEW FEATURES LATER
 --------------------------------------------------------------------------
 1. Add a new @admin_bp.route(...) function down in the "API ROUTES" section.
@@ -586,12 +605,20 @@ def list_licenses():
     else:
         rows = db_execute("SELECT * FROM licenses ORDER BY key", fetch="all")
 
+    switch_rows = db_execute(
+        "SELECT license_key, COUNT(*) AS n FROM device_switches WHERE switched_at > %s"
+        " GROUP BY license_key",
+        (int(time.time()) - 86400,), fetch="all",
+    ) or []
+    switches = {r["license_key"]: r["n"] for r in switch_rows}
+
     cutoff = int(time.time()) - ONLINE_WINDOW_SECS
     out = []
     for r in rows:
         r = dict(r)
         r["status"] = _license_status(r)
         r["online"] = (r.get("last_seen") or 0) >= cutoff
+        r["switches_24h"] = switches.get(r["key"], 0)
         out.append(r)
     return jsonify({"licenses": out})
 
@@ -709,6 +736,8 @@ def update_license_route(key):
 
     params.append(key)
     db_execute(f"UPDATE licenses SET {', '.join(fields)} WHERE key = %s", tuple(params))
+    if data.get("reset_device") or data.get("reset_activation"):
+        db_execute("DELETE FROM device_switches WHERE license_key = %s", (key,))
     return jsonify({"ok": True})
 
 
