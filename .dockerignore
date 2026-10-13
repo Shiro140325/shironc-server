@@ -1,0 +1,15 @@
+.git
+**/.git
+**/__pycache__
+**/node_modules
+apps/chat/android
+apps/chat/ios
+apps/chat/lib
+apps/chat/assets
+apps/chat/test
+apps/chat/web
+apps/chat/web-worker
+apps/chat/logo-export
+apps/smm/tests
+apps/smm/.env
+*.env

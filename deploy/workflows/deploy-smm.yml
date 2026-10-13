@@ -1,0 +1,31 @@
+# Copy to smm-panel's .github/workflows/. On each push, points shironc-server's
+# apps/smm submodule at the new commit, which redeploys the combined service.
+# Needs the COMBINED_DEPLOY_TOKEN secret: a fine-grained token with
+# Contents: read and write on Shiro140325/shironc-server.
+name: Deploy to the combined server
+on:
+  push:
+    branches: [main]
+concurrency: combined-deploy
+jobs:
+  bump:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Point shironc-server at this commit
+        env:
+          TOKEN: ${{ secrets.COMBINED_DEPLOY_TOKEN }}
+          MSG: ${{ github.event.head_commit.message }}
+        run: |
+          if [ -z "$TOKEN" ]; then echo "COMBINED_DEPLOY_TOKEN isn't set: skipping"; exit 0; fi
+          git clone --depth 1 "https://x-access-token:$TOKEN@github.com/Shiro140325/shironc-server.git" host
+          cd host
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          for attempt in 1 2 3 4; do
+            git update-index --cacheinfo "160000,$GITHUB_SHA,apps/smm"
+            git commit -q -m "smm-panel: $(printf '%s' "$MSG" | head -n 1)" -m "$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/commit/$GITHUB_SHA" || exit 0
+            git push -q origin HEAD:main && exit 0
+            sleep $((attempt * 3))
+            git fetch -q --depth 1 origin main && git reset -q --hard origin/main
+          done
+          exit 1

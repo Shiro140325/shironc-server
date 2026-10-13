@@ -1,0 +1,8 @@
+[submodule "apps/chat"]
+	path = apps/chat
+	url = https://github.com/Shiro140325/Shiro.git
+	branch = flutter-starter
+[submodule "apps/smm"]
+	path = apps/smm
+	url = https://github.com/Shiro140325/smm-panel.git
+	branch = main
