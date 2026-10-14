@@ -532,22 +532,5 @@ def migrate_device():
     return jsonify({"ok": True}), 200
 
 
-@app.route("/add", methods=["POST"])
-def add_license():
-    if request.headers.get("x-admin") != "your-secret":
-        return jsonify({"error": "unauthorized"}), 403
-
-    data = request.json
-    key = data.get("key")
-    days = data.get("days", 90)
-
-    db_execute(
-        "INSERT INTO licenses (key, days, activated_at, device_id) VALUES (%s, %s, NULL, NULL)",
-        (key, days)
-    )
-
-    return jsonify({"status": "added"})
-
-
 if __name__ == "__main__":
     app.run()
