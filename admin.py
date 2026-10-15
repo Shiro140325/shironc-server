@@ -23,8 +23,8 @@ GROQ_API_KEY / etc — e.g. Render/Railway/Fly dashboard, or a .env file):
     ADMIN_PASSWORD=your-real-password-here
     SECRET_KEY=some-long-random-string   (keeps you logged in across restarts)
 
-If ADMIN_PASSWORD is not set, it falls back to "changeme" and a big warning
-is printed to the server log on startup — change it before you deploy.
+If ADMIN_PASSWORD is not set, the panel refuses every sign-in (and a big
+warning is printed to the server log on startup).
 
 --------------------------------------------------------------------------
 ONBOARDING EMAIL (Resend)
@@ -109,6 +109,7 @@ from flask import (
 )
 
 from email_templates import render_onboarding_email, render_otp_email
+from netguard import Limiter, real_ip
 
 # --------------------------------------------------------------------------
 # Config (env-driven so nothing is hardcoded / everything is easy to change)
@@ -171,8 +172,8 @@ def init_admin(app):
         print(
             "\n"
             "!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!\n"
-            "  WARNING: ADMIN_PASSWORD is not set — using default 'changeme'.\n"
-            "  Set the ADMIN_PASSWORD environment variable before deploying.\n"
+            "  WARNING: ADMIN_PASSWORD is not set — the panel refuses every sign-in.\n"
+            "  Set the ADMIN_PASSWORD environment variable.\n"
             "!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!\n"
         )
 
@@ -298,8 +299,12 @@ def _hash(value):
 
 
 def _client_ip():
-    fwd = request.headers.get("X-Forwarded-For", "")
-    return fwd.split(",")[0].strip() if fwd else (request.remote_addr or "unknown")
+    return real_ip(request.headers, request.remote_addr)
+
+
+# Wrong admin passwords: per IP, and overall (guesses spread over many IPs).
+_login_fails_ip = Limiter(10, 15 * 60)
+_login_fails_all = Limiter(100, 3600)
 
 
 def _device_label():
@@ -392,12 +397,23 @@ def _start_otp_challenge():
 
 @admin_bp.route("/api/login", methods=["POST"])
 def login():
-    data = request.json or {}
+    data = request.get_json(silent=True) or {}
     password = data.get("password", "")
+    if not isinstance(password, str):
+        password = ""
+    if ADMIN_PASSWORD == "changeme":
+        # Never sign anyone in with the default: anyone could guess it.
+        return jsonify({"error": "the admin password isn't set on the server (ADMIN_PASSWORD)"}), 503
+    ip = _client_ip()
+    if _login_fails_ip.blocked(ip) or _login_fails_all.blocked("all"):
+        return jsonify({"error": "too many wrong passwords — try again in 15 minutes"}), 429
     # constant-time compare
-    if not secrets.compare_digest(password, ADMIN_PASSWORD):
+    if not secrets.compare_digest(password.encode(), ADMIN_PASSWORD.encode()):
+        _login_fails_ip.add(ip)
+        _login_fails_all.add("all")
         time.sleep(0.5)  # slow down brute force a little
         return jsonify({"error": "invalid password"}), 401
+    _login_fails_ip.reset(ip)
 
     device = _current_device_row()
     if device:

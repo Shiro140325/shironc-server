@@ -1,7 +1,7 @@
-flask
-gunicorn
-supabase
-requests
-httpx
-psycopg2-binary
-resend
+# Pinned, so a deploy never picks up a new (possibly broken or compromised)
+# release on its own. Update deliberately.
+flask==3.1.3
+gunicorn==26.2.0
+requests==2.34.2
+psycopg2-binary==2.9.13
+resend==2.49.1

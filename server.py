@@ -10,12 +10,16 @@ from urllib.parse import quote
 print("SERVER RUNNING FROM:", os.getcwd())
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 
-from flask import Flask, request, jsonify
+from flask import Flask, abort, request, jsonify
 from werkzeug.exceptions import HTTPException
 import psycopg2
 import psycopg2.extras
 
+from netguard import Limiter, real_ip
+
 app = Flask(__name__)
+# The largest thing anyone sends is audio for /transcribe (Groq takes up to 25 MB).
+app.config["MAX_CONTENT_LENGTH"] = 26 * 1024 * 1024
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("shironc")
@@ -74,7 +78,8 @@ def handle_unhandled_exception(e):
         "[UNHANDLED] %s %s -> %s\n%s",
         request.method, request.path, e, traceback.format_exc()
     )
-    return jsonify({"error": "internal_error", "detail": str(e)}), 500
+    # The details stay in the log: they can include database or internal information.
+    return jsonify({"error": "internal_error"}), 500
 
 
 MIN_VERSION = (1, 16, 1)  # fallback default if app_config has no min_version row yet
@@ -133,6 +138,23 @@ def _parse_version(v: str) -> tuple:
 
 def get_license(key):
     return db_execute("SELECT * FROM licenses WHERE key = %s", (key,), fetch="one")
+
+
+# Unknown license keys per IP: enough for a real client whose license was
+# deleted (it polls every ~20s) but not for guessing keys.
+_bad_keys = Limiter(60, 15 * 60)
+
+
+def license_for(key):
+    """The license for [key], or None. Unknown keys count against this IP, and an
+    IP with too many is refused before the lookup (429), so keys can't be guessed."""
+    ip = real_ip(request.headers, request.remote_addr)
+    if _bad_keys.blocked(ip):
+        abort(429)
+    lic = get_license(key) if key else None
+    if not lic:
+        _bad_keys.add(ip)
+    return lic
 
 
 def update_license(key, activated_at, device_id):
@@ -271,12 +293,16 @@ def health():
     }), 200
 
 
+# What /transcribe passes on to Groq from the client's form.
+GROQ_FIELDS = {"model", "language", "prompt", "response_format", "temperature", "timestamp_granularities[]"}
+
+
 @app.route("/transcribe", methods=["POST"])
 def transcribe():
     key = request.headers.get("X-License-Key", "").strip().upper()
     device = request.headers.get("X-Device-ID", "").strip()
 
-    lic = get_license(key)
+    lic = license_for(key)
     if not lic:
         return jsonify({"error": "unauthorized"}), 401
     if lic["device_id"] != device:
@@ -296,14 +322,14 @@ def transcribe():
         response = _requests.post(
             "https://api.groq.com/openai/v1/audio/transcriptions",
             headers={"Authorization": f"Bearer {os.environ['GROQ_API_KEY']}"},
-            data={k: v for k, v in request.form.items()},
+            data={k: v for k, v in request.form.items() if k in GROQ_FIELDS},
             files={"file": (file.filename, file.stream, file.mimetype)},
             timeout=60,
         )
         return (response.content, response.status_code, {"Content-Type": "application/json"})
     except Exception as e:
         logger.error("[TRANSCRIBE] failed: %s\n%s", e, traceback.format_exc())
-        return jsonify({"error": str(e)}), 500
+        return jsonify({"error": "transcription failed"}), 502
 
 
 @app.route("/")
@@ -316,7 +342,7 @@ def status():
     key = request.args.get("key", "").strip().upper()
     device = request.args.get("device")
 
-    lic = get_license(key)
+    lic = license_for(key)
     if not lic or lic["device_id"] != device:
         return jsonify({"active": False}), 200
 
@@ -331,11 +357,11 @@ def status():
 
 @app.route("/activate", methods=["POST"])
 def activate():
-    data = request.json
+    data = request.get_json(silent=True) or {}
     key = data.get("key", "").strip().upper()
     device = data.get("device")
 
-    lic = get_license(key)
+    lic = license_for(key)
     if not lic:
         return jsonify({"error": "Invalid license"}), 400
 
@@ -396,7 +422,7 @@ def activate():
 
 @app.route("/validate", methods=["POST"])
 def validate():
-    data = request.json
+    data = request.get_json(silent=True) or {}
     key = data.get("key", "").strip().upper()
     device = data.get("device")
     version_str = data.get("version", "0.0.0")
@@ -405,7 +431,7 @@ def validate():
     if version < get_min_version():
         return jsonify({"error": "Invalid"}), 400
 
-    lic = get_license(key)
+    lic = license_for(key)
     if not lic:
         return jsonify({"error": "Invalid"}), 400
     if lic["device_id"] != device:
@@ -475,7 +501,7 @@ def upload_logs():
     if not isinstance(logs, dict) or not logs:
         return jsonify({"error": "no logs"}), 400
 
-    lic = get_license(key)
+    lic = license_for(key)
     if not lic or lic["device_id"] != device:
         return jsonify({"error": "Invalid"}), 403
 
@@ -519,12 +545,12 @@ def migrate_device():
     very next plain key+device request succeeds instead of getting rejected
     as 'used on another device'. Safe to delete once existing installs have
     all had a chance to run this at least once."""
-    data = request.json
+    data = request.get_json(silent=True) or {}
     key = data.get("key", "").strip().upper()
     uid = data.get("unique_identifier")
     device = data.get("device")
 
-    lic = get_license(key)
+    lic = license_for(key)
     if not lic or not uid or lic.get("unique_identifier") != uid:
         return jsonify({"error": "Invalid"}), 400
 
