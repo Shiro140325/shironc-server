@@ -17,6 +17,12 @@ RUN apt-get update \
  && apt-get install -y --no-install-recommends nginx-light \
  && rm -rf /var/lib/apt/lists/* \
  && rm -f /etc/nginx/sites-enabled/default
+# Each app runs as its own user (deploy/launch.py switches to it), so one
+# compromised app can't read the others' secrets or change their files.
+RUN for u in app-nc:10001 app-smm:10002 app-chat:10003; do \
+      useradd --system --uid "${u#*:}" --user-group --no-create-home \
+              --home-dir /nonexistent --shell /usr/sbin/nologin "${u%%:*}"; \
+    done
 COPY --from=chat-deps /usr/local/bin/node /usr/local/bin/node
 
 # Each Python app gets its own virtualenv, so their pins can't clash.
