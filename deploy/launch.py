@@ -2,18 +2,24 @@
 
 Environment variables:
   shironc.com uses the service's own environment variables, as before.
-  smm-panel and the Shiro chat server each read their own secret file instead,
-  /etc/secrets/smm.env and /etc/secrets/chat.env (Render "Secret Files", in
-  .env format), so the same name (DATABASE_URL, RESEND_API_KEY, ...) can hold a
-  different value per app. They don't see shironc's variables.
+  smm-panel and the Shiro chat server each get their own settings, so the same
+  name (DATABASE_URL, RESEND_API_KEY, ...) can hold a different value per app.
+  They come from the service's environment, which only this launcher (root)
+  can read:
+    SMM_ENV / CHAT_ENV   the app's whole .env file pasted as one value, and/or
+    SMM__NAME / CHAT__NAME   one setting each (becomes NAME; wins over *_ENV)
+  None of these reach shironc, and each app sees only its own.
+  Older setup: /etc/secrets/smm.env and /etc/secrets/chat.env (Render "Secret
+  Files"). Still read when there's nothing in the environment for that app,
+  but Render mounts them readable by every user, so prefer the variables.
 
-Users: this launcher runs as root (to read the secret files and start nginx),
-but each app runs as its own unprivileged user (app-nc, app-smm, app-chat,
-made in the Dockerfile). A bug in one app then can't read another app's
-secrets: the secret files are made readable by root only once read, and a
-process's environment can only be read by its own user.
+Users: this launcher runs as root (to read the settings and start nginx), but
+each app runs as its own unprivileged user (app-nc, app-smm, app-chat, made in
+the Dockerfile), and a process's environment can only be read by its own user.
+So a bug in one app can't read another app's secrets.
 """
 
+import io
 import os
 import pwd
 import signal
@@ -32,31 +38,34 @@ PORT = os.environ.get("PORT", "10000")
 SHARED = ("PATH", "HOME", "LANG", "LC_ALL", "TZ", "PYTHONUNBUFFERED")
 
 
-def lock_down(path):
-    """Make a secret file readable by root only (it may be on a read-only mount)."""
-    try:
-        os.chown(path, 0, 0)
-        os.chmod(path, 0o600)
-    except OSError as e:
-        print(f"[launch] could not lock down {path} ({e}); apps may be able to read it", flush=True)
-
-
 def own_env(name):
-    """The environment for smm or chat: the basics plus its secret file."""
+    """The environment for smm or chat: the basics plus its own settings."""
     env = {k: v for k, v in os.environ.items() if k in SHARED or k.startswith("RENDER")}
+    pasted = os.environ.get(f"{name.upper()}_ENV", "")
+    prefix = f"{name.upper()}__"
+    single = {k[len(prefix):]: v for k, v in os.environ.items() if k.startswith(prefix) and len(k) > len(prefix)}
     path = os.path.join(SECRETS_DIR, f"{name}.env")
-    if os.path.exists(path):
+    if pasted or single:
+        env.update({k: v for k, v in dotenv_values(stream=io.StringIO(pasted)).items() if v is not None})
+        env.update(single)
+        if os.path.exists(path):
+            print(f"[launch] {name}: using the environment; {path} is ignored and can be deleted", flush=True)
+    elif os.path.exists(path):
         env.update({k: v for k, v in dotenv_values(path).items() if v is not None})
-        lock_down(path)
+        print(f"[launch] {name}: read {path}, which every app can read; move it to {name.upper()}_ENV", flush=True)
     else:
-        print(f"[launch] {path} is missing: {name} starts without its settings", flush=True)
+        print(f"[launch] {name}: no settings found, starting without them", flush=True)
     return env
+
+
+def is_other_apps(key):
+    return key in ("SMM_ENV", "CHAT_ENV") or key.startswith(("SMM__", "CHAT__"))
 
 
 APPS = {
     "nc": dict(
         cwd="/srv/nc",
-        env=dict(os.environ),
+        env={k: v for k, v in os.environ.items() if not is_other_apps(k)},
         user="app-nc",
         cmd=["/opt/venv-nc/bin/gunicorn", "server:app", "--bind", "127.0.0.1:8001",
              "--worker-class", "gthread", "--workers", os.environ.get("NC_WORKERS", "1"),

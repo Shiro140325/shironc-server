@@ -16,9 +16,16 @@ go to the chat app.
 ## Settings
 
 - **shironc:** reads the service's own environment variables, as before.
-- **smm-panel and chat:** each reads its own Render **Secret File**, `smm.env` and `chat.env`, in
-  `.env` format (`NAME=value` per line, multi-line values in quotes). This keeps names like
-  `DATABASE_URL` separate per app. These two apps don't see shironc's variables.
+- **smm-panel and chat:** each gets its own settings from the service's environment, so names
+  like `DATABASE_URL` stay separate per app:
+  - `SMM_ENV` / `CHAT_ENV`: the app's whole `.env` file (`NAME=value` per line, multi-line
+    values in quotes) pasted as one value, and/or
+  - `SMM__NAME` / `CHAT__NAME`: one setting each, passed to the app as `NAME` (wins over `*_ENV`).
+
+  These two apps don't see shironc's variables, shironc doesn't see theirs, and each app runs as
+  its own user, so it can't read the others' environment. The old Render **Secret Files**
+  `smm.env` and `chat.env` still work when an app has nothing in the environment, but Render
+  makes them readable by every app, so move them and delete the files.
 - `NC_WORKERS` (optional, default 1): gunicorn workers for shironc (16 threads each). It was 2
   before, cut to 1 to leave memory for the other two apps.
 
