@@ -107,8 +107,10 @@ def supervise(name, app):
     drop = as_user(app)
     while not stopping:
         started = time.monotonic()
-        procs[name] = subprocess.Popen(app["cmd"], cwd=app["cwd"], env=app["env"], **drop)
+        procs[name] = subprocess.Popen(["/bin/sh", os.path.join(HERE, "run_app.sh"), *app["cmd"]],
+                                       cwd=app["cwd"], env=app["env"], stdin=subprocess.PIPE, **drop)
         code = procs[name].wait()
+        procs[name].stdin.close()
         if stopping:
             return
         delay = 1 if time.monotonic() - started > 60 else min(delay * 2, 30)
@@ -120,9 +122,13 @@ def stop(*_):
     """Ask every process to exit; main() waits for them once nginx is gone."""
     global stopping
     stopping = True
-    for p in list(procs.values()):
-        if p.poll() is None:
+    for name, p in list(procs.items()):
+        if p.poll() is not None:
+            continue
+        if name == "nginx":
             p.terminate()
+        else:
+            p.stdin.close()   # run_app.sh stops the app (root can't signal it)
 
 
 def wait_all():
@@ -131,7 +137,10 @@ def wait_all():
         try:
             p.wait(max(0, deadline - time.monotonic()))
         except subprocess.TimeoutExpired:
-            p.kill()
+            try:
+                p.kill()
+            except OSError:
+                pass   # another user's process; it goes when the container does
 
 
 def main():
