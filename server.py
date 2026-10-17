@@ -79,6 +79,9 @@ def handle_unhandled_exception(e):
         request.method, request.path, e, traceback.format_exc()
     )
     # The details stay in the log: they can include database or internal information.
+    if isinstance(e, psycopg2.OperationalError):
+        # Database unreachable: a temporary outage, not a verdict on the request.
+        return jsonify({"error": "unavailable"}), 503
     return jsonify({"error": "internal_error"}), 500
 
 
@@ -116,7 +119,12 @@ DEFAULT_POLL_CONFIG = {
 def get_poll_config():
     now = time.time()
     if _poll_config_cache["value"] is None or now - _poll_config_cache["ts"] > _POLL_CONFIG_TTL:
-        row = db_execute("SELECT value FROM app_config WHERE key = %s", ("poll_config",), fetch="one")
+        try:
+            row = db_execute("SELECT value FROM app_config WHERE key = %s", ("poll_config",), fetch="one")
+        except psycopg2.OperationalError:
+            if _poll_config_cache["value"] is None:
+                raise
+            return _poll_config_cache["value"]  # keep the stale value until the database is back
         if row:
             try:
                 _poll_config_cache["value"] = {**DEFAULT_POLL_CONFIG, **json.loads(row["value"])}
@@ -136,8 +144,26 @@ def _parse_version(v: str) -> tuple:
         return (0, 0, 0)
 
 
+# Last row read for each license. The database restarts now and then (each
+# one is ~30s of refused connections), and a /validate or /status that fails
+# then reads to the client as "activated on another device". While the
+# database can't be reached, license checks answer from the last good read.
+_license_rows = {}
+
+
 def get_license(key):
-    return db_execute("SELECT * FROM licenses WHERE key = %s", (key,), fetch="one")
+    try:
+        lic = db_execute("SELECT * FROM licenses WHERE key = %s", (key,), fetch="one")
+    except psycopg2.OperationalError:
+        if key in _license_rows:
+            logger.warning("[LICENSE] database unreachable, using the last read of %s", key)
+            return _license_rows[key]
+        raise
+    if lic:
+        _license_rows[key] = lic
+    else:
+        _license_rows.pop(key, None)
+    return lic
 
 
 # Unknown license keys per IP: enough for a real client whose license was
@@ -167,7 +193,12 @@ def update_license(key, activated_at, device_id):
 def get_min_version():
     now = time.time()
     if _min_version_cache["value"] is None or now - _min_version_cache["ts"] > _MIN_VERSION_TTL:
-        row = db_execute("SELECT value FROM app_config WHERE key = %s", ("min_version",), fetch="one")
+        try:
+            row = db_execute("SELECT value FROM app_config WHERE key = %s", ("min_version",), fetch="one")
+        except psycopg2.OperationalError:
+            if _min_version_cache["value"] is None:
+                raise
+            return _min_version_cache["value"]  # keep the stale value until the database is back
         _min_version_cache["value"] = _parse_version(row["value"]) if row else MIN_VERSION
         _min_version_cache["ts"] = now
     return _min_version_cache["value"]
