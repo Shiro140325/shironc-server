@@ -37,7 +37,7 @@ COPY apps/chat/server/package.json /srv/chat/
 COPY apps/chat/server/src /srv/chat/src
 COPY apps/chat/server/public /srv/chat/public
 COPY apps/smm /srv/smm
-COPY server.py admin.py email_templates.py netguard.py /srv/nc/
+COPY server.py admin.py payments.py email_templates.py netguard.py /srv/nc/
 COPY admin_static /srv/nc/admin_static
 COPY deploy /srv/deploy
 

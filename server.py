@@ -28,6 +28,11 @@ from admin import admin_bp, init_admin
 init_admin(app)
 app.register_blueprint(admin_bp)
 
+# PayMongo checkout: /purchase, /purchase/status, /paymongo/webhook (see payments.py).
+from payments import payments_bp, init_payments
+init_payments(app)
+app.register_blueprint(payments_bp)
+
 NEON_DATABASE_URL = os.environ.get("NEON_DATABASE_URL")
 
 
