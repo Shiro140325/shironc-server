@@ -213,6 +213,36 @@ r = webhook("checkout_session.payment.paid", {"id": "cs_" + ref5, "attributes": 
 r = client.get(f"/purchase/status?reference={ref5}&device={DEVICE}")
 check("redelivery fulfils it", r.get_json()["status"] == "paid" and r.get_json().get("key"), str(r.get_json()))
 
+print("\n=== payment methods the account has not activated ===")
+# PayMongo refuses the whole request by name when a method is not activated,
+# so the checkout has to walk down to one that is.
+def picky_post(accepts):
+    def post(url, headers=None, json=None, timeout=None):
+        asked = json["data"]["attributes"]["payment_method_types"]
+        if asked != accepts:
+            return Resp(400, {"errors": [{"detail":
+                f"payment_method_types {asked} is not enabled on this account"}]})
+        ref = json["data"]["attributes"]["reference_number"]
+        return Resp(200, {"data": {"id": "cs_" + ref, "attributes": {
+            "checkout_url": "https://checkout.paymongo.com/" + ref}}})
+    return post
+
+payments.requests.post = picky_post(["gcash"])
+r = client.post("/purchase", json={"mode": "new", "device": DEVICE})
+check("falls through qrph to a method that is activated", r.status_code == 200,
+      r.get_data(as_text=True))
+
+payments.requests.post = picky_post(["nothing_we_try"])
+r = client.post("/purchase", json={"mode": "new", "device": DEVICE})
+check("all refused -> 502 naming what was tried",
+      r.status_code == 502 and "payment methods" in r.get_json()["error"],
+      r.get_data(as_text=True))
+check("and no order row is left behind for it",
+      len(fake_db("SELECT id FROM license_orders WHERE status = 'pending'", fetch="all")) == 1,
+      str(fake_db("SELECT reference, status FROM license_orders", fetch="all")))
+
+payments.requests.post = fake_post
+
 print("\n=== landing pages ===")
 r = client.get("/pay/thanks")
 check("/pay/thanks renders", r.status_code == 200 and b"Payment received" in r.data)

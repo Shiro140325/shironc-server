@@ -40,7 +40,9 @@ the name actually found is printed at startup.
 Optional:
     LICENSE_PRICE_CENTAVOS     default 12900  (= PHP 129.00)
     LICENSE_DAYS               default 30
-    PAYMONGO_METHODS           comma-separated, default "gcash,paymaya,card,grab_pay"
+    PAYMONGO_METHODS           comma-separated, default "qrph" (what this account
+                               has activated in live mode); falls back through
+                               qrph / gcash / card if PayMongo refuses the list
     PUBLIC_BASE_URL            default "https://server.shironc.com" (success/cancel pages)
     PAYMONGO_WEBHOOK_INSECURE  "1" skips signature checks — local testing only
 
@@ -125,15 +127,20 @@ PRICE_CENTAVOS = int(os.environ.get("LICENSE_PRICE_CENTAVOS", "12900"))
 LICENSE_DAYS = int(os.environ.get("LICENSE_DAYS", "30"))
 PUBLIC_BASE_URL = os.environ.get("PUBLIC_BASE_URL", "https://server.shironc.com").rstrip("/")
 
-# What the checkout page offers. An account with a method not yet enabled gets
-# a 400 from PayMongo naming it, so _create_checkout_session retries with a
-# minimal list rather than failing the sale.
+# What the checkout page offers. PayMongo rejects the whole request if the
+# account has not activated one of these, so the default is what the SMM panel
+# on this same account sells with in live mode (QR Ph, which every PH bank and
+# wallet app can scan). Widen it with PAYMONGO_METHODS once more are activated
+# — "gcash,paymaya,card,grab_pay,qrph" and so on.
 PAYMONGO_METHODS = [
     m.strip() for m in
-    os.environ.get("PAYMONGO_METHODS", "gcash,paymaya,card,grab_pay").split(",")
+    os.environ.get("PAYMONGO_METHODS", "qrph").split(",")
     if m.strip()
 ]
-_FALLBACK_METHODS = ["gcash", "card"]
+
+# Tried in turn when PayMongo refuses the list above by name, so a method that
+# is not activated yet costs us a retry instead of the sale.
+_FALLBACK_METHODS = (["qrph"], ["gcash"], ["card"])
 
 PAYMONGO_API = "https://api.paymongo.com/v1"
 
@@ -331,10 +338,30 @@ def _auth_header():
     return {"Authorization": f"Basic {token}", "Content-Type": "application/json"}
 
 
-def _create_checkout_session(reference, description, metadata, methods=None):
+def _create_checkout_session(reference, description, metadata):
     """Returns (checkout_url, checkout_id). Raises RuntimeError with something
     printable on failure."""
-    methods = methods or PAYMONGO_METHODS
+    tried, last_error = [], None
+    for methods in (PAYMONGO_METHODS, *_FALLBACK_METHODS):
+        if not methods or methods in tried:
+            continue
+        tried.append(methods)
+        try:
+            return _post_checkout_session(reference, description, metadata, methods)
+        except _MethodRefused as e:
+            logger.warning("[PAYMENTS] %s not accepted (%s), trying the next list", methods, e)
+            last_error = e
+    raise RuntimeError(
+        f"PayMongo would not accept any of these payment methods: {tried}. "
+        f"Activate one on the account, or set PAYMONGO_METHODS. ({last_error})"
+    )
+
+
+class _MethodRefused(Exception):
+    """PayMongo turned the request down over payment_method_types specifically."""
+
+
+def _post_checkout_session(reference, description, metadata, methods):
     payload = {
         "data": {
             "attributes": {
@@ -373,11 +400,8 @@ def _create_checkout_session(reference, description, metadata, methods=None):
     if r.status_code >= 400:
         detail = r.text[:400]
         logger.error("[PAYMENTS] checkout_sessions HTTP %s: %s", r.status_code, detail)
-        # A payment method the account hasn't enabled is rejected by name —
-        # retry once with the ones every account has rather than lose the sale.
-        if r.status_code == 400 and "payment_method" in detail and methods != _FALLBACK_METHODS:
-            logger.warning("[PAYMENTS] retrying checkout with %s", _FALLBACK_METHODS)
-            return _create_checkout_session(reference, description, metadata, _FALLBACK_METHODS)
+        if r.status_code in (400, 422) and "payment_method" in detail:
+            raise _MethodRefused(detail)
         raise RuntimeError(f"PayMongo rejected the checkout (HTTP {r.status_code})")
 
     try:
