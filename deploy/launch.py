@@ -58,6 +58,11 @@ def own_env(name):
     return env
 
 
+# glibc gives busy threads heaps of their own and seldom hands freed memory
+# back, so a threaded Python app slowly grows. Two heaps keep it in check.
+PY_MALLOC = {"MALLOC_ARENA_MAX": "2"}
+
+
 def is_other_apps(key):
     return key in ("SMM_ENV", "CHAT_ENV") or key.startswith(("SMM__", "CHAT__"))
 
@@ -65,7 +70,7 @@ def is_other_apps(key):
 APPS = {
     "nc": dict(
         cwd="/srv/nc",
-        env={k: v for k, v in os.environ.items() if not is_other_apps(k)},
+        env={**{k: v for k, v in os.environ.items() if not is_other_apps(k)}, **PY_MALLOC},
         user="app-nc",
         cmd=["/opt/venv-nc/bin/gunicorn", "server:app", "--bind", "127.0.0.1:8001",
              "--worker-class", "gthread", "--workers", os.environ.get("NC_WORKERS", "1"),
@@ -73,7 +78,7 @@ APPS = {
     ),
     "smm": dict(
         cwd="/srv/smm",
-        env=own_env("smm"),
+        env={**own_env("smm"), **PY_MALLOC},
         user="app-smm",
         cmd=["/opt/venv-smm/bin/uvicorn", "app.main:app", "--host", "127.0.0.1", "--port", "8002"],
     ),
@@ -99,6 +104,45 @@ def as_user(app):
 
 procs = {}
 stopping = False
+
+# Every app shares the container's memory, and Render restarts the whole
+# container when it runs out. Each app's share is logged now and then, so
+# the one that keeps growing shows up in the logs.
+MEMORY_EVERY = int(os.environ.get("MEMORY_LOG_SECONDS", "600"))
+
+
+def _proc_table():
+    """pid -> (parent pid, resident memory in kB) for every process."""
+    table = {}
+    for pid in os.listdir("/proc"):
+        if not pid.isdigit():
+            continue
+        try:
+            with open(f"/proc/{pid}/status") as f:
+                fields = dict(line.split(":", 1) for line in f if ":" in line)
+            table[int(pid)] = (int(fields["PPid"]), int(fields.get("VmRSS", "0 kB").split()[0]))
+        except (OSError, KeyError, ValueError):
+            pass   # gone meanwhile, or a kernel thread
+    return table
+
+
+def _tree_kb(root, table):
+    """Resident memory of [root] and everything under it."""
+    total, todo = 0, [root]
+    while todo:
+        pid = todo.pop()
+        total += table.get(pid, (0, 0))[1]
+        todo += [p for p, (parent, _) in table.items() if parent == pid]
+    return total
+
+
+def log_memory():
+    while not stopping:
+        time.sleep(MEMORY_EVERY)
+        table = _proc_table()
+        parts = {name: _tree_kb(p.pid, table) for name, p in list(procs.items()) if p.poll() is None}
+        print("[memory] " + ", ".join(f"{n} {kb // 1024} MB" for n, kb in parts.items())
+              + f" (total {sum(parts.values()) // 1024} MB)", flush=True)
 
 
 def supervise(name, app):
@@ -154,6 +198,8 @@ def main():
 
     for name, app in APPS.items():
         threading.Thread(target=supervise, args=(name, app), daemon=True).start()
+    if MEMORY_EVERY > 0:
+        threading.Thread(target=log_memory, daemon=True).start()
 
     # nginx is the front door: if it dies, let Render restart the container.
     procs["nginx"] = subprocess.Popen(["nginx", "-c", "/tmp/nginx.conf", "-g", "daemon off;"])
